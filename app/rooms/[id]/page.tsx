@@ -9,6 +9,7 @@ import RoomManageActions from "@/components/RoomManageActions";
 import RoomModelView from "@/components/RoomModelView";
 import { listRooms } from "@/lib/roomLibrary";
 import { buildPlansMapView, buildRoomMapView } from "@/lib/roomMapView";
+import { imageOverlayCaption } from "@/lib/exitPath";
 import type { AnalysisResult, SavedRoom } from "@/lib/types";
 
 export default function RoomDetailPage() {
@@ -147,7 +148,7 @@ export default function RoomDetailPage() {
           <div className="space-y-4">
             <div className="px-1">
               <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">
-                Labeled frames
+                {room.scanMode === "photo" ? "Labeled photos" : "Labeled frames"}
               </p>
               <p className="text-xs text-slate-400">
                 Each view from your scan — exits, windows, and shelter spots.
@@ -160,7 +161,11 @@ export default function RoomDetailPage() {
               >
                 <div className="border-b border-slate-800 px-4 py-2">
                   <p className="text-xs font-semibold text-slate-400">
-                    Frame {index + 1} of {labeledFrames.length}
+                    {room.scanMode === "photo" ? "Photo" : "Frame"}{" "}
+                    {index + 1} of {labeledFrames.length}
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    {imageOverlayCaption(result)}
                   </p>
                 </div>
                 <div className="overflow-visible p-3">
@@ -196,7 +201,7 @@ export default function RoomDetailPage() {
                 Labeled scan
               </p>
               <p className="text-xs text-slate-400">
-                Exits, windows, and shelter spots — dotted line to nearest exit.
+                {imageOverlayCaption(mapView)}
               </p>
             </div>
             <div className="overflow-visible p-3">

@@ -22,6 +22,26 @@ function stripRoomModel(plans: ScenarioPlans): ScenarioPlans {
 }
 
 /**
+ * Label every photo in a multi-photo room setup and use the first view as the
+ * primary emergency plan (matches the thumbnail / room.image).
+ */
+export async function setupMultiPhotoRoom(
+  frameSources: ImageSource[],
+): Promise<{ plans: ScenarioPlans; framePlans: ScenarioPlans[] }> {
+  const framePlans: ScenarioPlans[] = [];
+  for (const source of frameSources) {
+    framePlans.push(
+      await analyzeScenarios({ mode: "photo", sources: [source] }),
+    );
+  }
+
+  return {
+    plans: framePlans[0],
+    framePlans,
+  };
+}
+
+/**
  * Run a full 360° room setup: one video360 pass for the floor plan, then a
  * photo-style analysis on every sampled frame for per-view labels.
  */

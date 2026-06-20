@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { roomModelCaption } from "@/lib/exitPath";
 import { normalizeRoomModel } from "@/lib/roomModel";
 import type { LandmarkType, Point2D, RoomModel, Scenario } from "@/lib/types";
 
@@ -73,14 +74,7 @@ export default function RoomModelView({
     return safeModel.exit_path.filter((p) => p.length === 2);
   }, [safeModel, showExitPath]);
 
-  const subtitle =
-    scenario === "FIRE"
-      ? "Follow the dotted line to the nearest exit."
-      : scenario === "EARTHQUAKE"
-        ? "Head to marked cover zones — do not use exit paths while shaking."
-        : scenario === "CODE_RED"
-          ? "Move to concealment along the dotted path."
-          : "Stitched from your 360° scan — follow the dotted line to the exit.";
+  const subtitle = roomModelCaption(scenario, exitPath.length >= 2);
   const origin = useMemo(
     () => (safeModel ? pt(safeModel.scan_origin) : { x: 0.5, y: 0.82 }),
     [safeModel],

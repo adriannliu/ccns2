@@ -8,7 +8,7 @@ import {
 import { isDuplicateRoomLabel } from "@/lib/roomLabel";
 import { roomLabelCount } from "@/lib/roomLabels";
 import { ALL_SCENARIOS, runSpatialAnalysis } from "@/lib/spatialAnalysis";
-import { setupVideo360Room } from "@/lib/videoSetup";
+import { setupMultiPhotoRoom, setupVideo360Room } from "@/lib/videoSetup";
 import type { SavedRoom, ScenarioPlans, SetupRoomRequest } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -75,6 +75,14 @@ export async function POST(req: Request) {
         built.input,
         built.input.sources,
       );
+      plans = analyzed.plans;
+      framePlans = analyzed.framePlans;
+    } else if (built.input.sources.length > 1) {
+      const frameResolved = await resolveFrameImageUrls(body, built.input.sources);
+      frameImages = frameResolved.urls;
+      frameKeys = frameResolved.keys;
+
+      const analyzed = await setupMultiPhotoRoom(built.input.sources);
       plans = analyzed.plans;
       framePlans = analyzed.framePlans;
     } else {

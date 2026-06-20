@@ -2,12 +2,13 @@
 
 import { useMemo, useState } from "react";
 import { bboxCenter, normalizeBBox } from "@/lib/bbox";
+import {
+  USER_POSITION,
+  pickRecommendedEgress,
+} from "@/lib/exitPath";
 import type {
-  AccessibilityStatus,
   AnalysisResult,
   BBox,
-  EgressPoint,
-  EgressType,
   OverlayRegion,
   RegionKind,
   Scenario,
@@ -55,56 +56,10 @@ const KIND_STYLES: Record<
   },
 };
 
-/** Assumed camera/user position when holding the phone facing into the room. */
-const USER_POSITION = { x: 0.5, y: 0.92 } as const;
-
-const ACCESSIBILITY_RANK: Record<AccessibilityStatus, number> = {
-  Clear: 0,
-  "Partially Blocked": 1,
-  Blocked: 2,
-};
-
-const EGRESS_TYPE_RANK: Record<EgressType, number> = {
-  "Primary Door": 0,
-  "Secondary Door": 1,
-  Window: 2,
-};
-
 /** Clamp a number into the [0, 1] range. */
 function clamp01(n: number): number {
   if (typeof n !== "number" || Number.isNaN(n)) return 0;
   return Math.min(1, Math.max(0, n));
-}
-
-function dist(
-  a: { x: number; y: number },
-  b: { x: number; y: number },
-): number {
-  return Math.hypot(a.x - b.x, a.y - b.y);
-}
-
-/** Pick the best egress: prefer clear primary doors, then nearest by distance. */
-function pickRecommendedEgress(egress: EgressPoint[]): EgressPoint | null {
-  const valid = egress.filter((e) => normalizeBBox(e.coordinates) !== null);
-  if (valid.length === 0) return null;
-
-  const reachable = valid.filter((e) => e.accessibility_status !== "Blocked");
-  const candidates = reachable.length > 0 ? reachable : valid;
-
-  return [...candidates].sort((a, b) => {
-    const byAccess =
-      ACCESSIBILITY_RANK[a.accessibility_status] -
-      ACCESSIBILITY_RANK[b.accessibility_status];
-    if (byAccess !== 0) return byAccess;
-
-    const byType = EGRESS_TYPE_RANK[a.type] - EGRESS_TYPE_RANK[b.type];
-    if (byType !== 0) return byType;
-
-    return (
-      dist(USER_POSITION, bboxCenter(a.coordinates)) -
-      dist(USER_POSITION, bboxCenter(b.coordinates))
-    );
-  })[0];
 }
 
 /**
