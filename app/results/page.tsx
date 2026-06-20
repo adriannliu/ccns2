@@ -214,7 +214,10 @@ export default function ResultsPage() {
           <ListChecks className="h-4 w-4" /> Action plan
         </h2>
         <ol className="space-y-2">
-          {result.actionable_instructions.map((step, i) => (
+          {(Array.isArray(result.actionable_instructions)
+            ? result.actionable_instructions
+            : []
+          ).map((step, i) => (
             <li
               key={i}
               className="flex gap-3 rounded-2xl border border-slate-800 bg-slate-900/50 p-4"

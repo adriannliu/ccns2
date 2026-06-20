@@ -6,6 +6,7 @@ import {
 } from "@aws-sdk/client-bedrock-runtime";
 import type { AnalyzeInput } from "@/lib/analyzeInput";
 import { normalizeBBox } from "@/lib/bbox";
+import { SAFETY_PLAN_TOOL_CONFIG, extractToolInput } from "@/lib/bedrockTool";
 import { normalizeRoomModel } from "@/lib/roomModel";
 import { contentTypeToImageFormat, s3Location } from "@/lib/s3";
 import { SYSTEM_PROMPT_PHOTO, SYSTEM_PROMPT_VIDEO360 } from "@/lib/vlmPrompts";
@@ -82,6 +83,27 @@ function pickArray(raw: Record<string, unknown>, keys: string[]): unknown[] {
   return [];
 }
 
+/**
+ * Coerce the model's instructions into a string[]. Some vision models (e.g.
+ * the Nova fallback) return a single prose string instead of a JSON array,
+ * which would otherwise crash the UI's `.map()`.
+ */
+function toStringArray(raw: unknown): string[] {
+  if (Array.isArray(raw)) {
+    return raw.filter((s): s is string => typeof s === "string" && s.trim() !== "");
+  }
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (!trimmed) return [];
+    const parts = trimmed
+      .split(/\r?\n+|(?<=[.!?])\s+(?=[A-Z0-9])/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    return parts.length ? parts : [trimmed];
+  }
+  return [];
+}
+
 function normalizeResult(raw: Partial<AnalysisResult>): AnalysisResult {
   const record = raw as Record<string, unknown>;
   const egressRaw = pickArray(record, ["egress_points", "egressPoints", "exits"]);
@@ -119,7 +141,7 @@ function normalizeResult(raw: Partial<AnalysisResult>): AnalysisResult {
     egress_points,
     hazards,
     safe_zones,
-    actionable_instructions: raw.actionable_instructions ?? [],
+    actionable_instructions: toStringArray(raw.actionable_instructions),
     room_model: normalizeRoomModel(raw.room_model),
   };
 }
@@ -153,6 +175,10 @@ async function invokeModel(
       modelId,
       system: [{ text: isVideo ? SYSTEM_PROMPT_VIDEO360 : SYSTEM_PROMPT_PHOTO }],
       messages: [{ role: "user", content }],
+      // Force structured output. Both Claude 3+ and Nova must return arguments
+      // conforming to the tool schema — far more reliable than free-form JSON,
+      // which Nova in particular mangles into prose/string lists.
+      toolConfig: SAFETY_PLAN_TOOL_CONFIG,
       inferenceConfig: {
         temperature: TEMPERATURE,
         maxTokens: isVideo ? MAX_TOKENS_VIDEO : MAX_TOKENS_PHOTO,
@@ -160,8 +186,17 @@ async function invokeModel(
     }),
   );
 
-  const text = response.output?.message?.content?.find((c) => "text" in c)?.text;
-  if (!text) throw new Error("Bedrock returned an empty response.");
+  const blocks = response.output?.message?.content;
+
+  // Preferred path: structured arguments from the forced tool call.
+  const toolInput = extractToolInput(blocks);
+  if (toolInput && typeof toolInput === "object") {
+    return normalizeResult(toolInput as Partial<AnalysisResult>);
+  }
+
+  // Fallback: a model that answered with raw JSON text instead of a tool call.
+  const text = blocks?.find((c) => "text" in c)?.text;
+  if (!text) throw new Error("Bedrock returned no usable tool or text output.");
   return normalizeResult(extractJson(text) as Partial<AnalysisResult>);
 }
 
