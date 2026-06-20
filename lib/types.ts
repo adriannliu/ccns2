@@ -114,6 +114,16 @@ export interface AnalysisResult {
   actionable_instructions: string[];
   /** Present when the scan was built from a 360° video. */
   room_model?: RoomModel;
+  /** Pre-detector objects used to build this plan (debug / transparency). */
+  detections?: Array<{
+    id: string;
+    label: string;
+    category: string;
+    source: string;
+    confidence: number;
+    coordinates: BBox;
+  }>;
+  detection_sources?: string[];
 }
 
 /**

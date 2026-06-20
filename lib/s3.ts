@@ -19,7 +19,7 @@ import type { ImageFormat } from "@aws-sdk/client-bedrock-runtime";
  *     and returns a presigned GET URL for the results page to display.
  */
 
-const REGION = process.env.AWS_REGION ?? "us-east-1";
+const REGION = process.env.S3_REGION ?? process.env.AWS_REGION ?? "us-east-1";
 const BUCKET = process.env.S3_BUCKET ?? "";
 const PREFIX = process.env.S3_PREFIX ?? "scans";
 const ACCOUNT_ID = process.env.AWS_ACCOUNT_ID ?? "";
@@ -29,6 +29,10 @@ const DOWNLOAD_URL_TTL = 60 * 60; // 1h for the results page to render
 
 export function isS3Configured(): boolean {
   return Boolean(BUCKET);
+}
+
+export function getS3Bucket(): string {
+  return BUCKET;
 }
 
 let _client: S3Client | null = null;
@@ -83,6 +87,15 @@ export async function createUploadUrl(
     ContentType: contentType,
   });
   return getSignedUrl(client(), command, { expiresIn: UPLOAD_URL_TTL });
+}
+
+/** Fetch raw object bytes (Rekognition/YOLO on inline fallback paths). */
+export async function getObjectBytes(key: string): Promise<Uint8Array> {
+  const command = new GetObjectCommand({ Bucket: BUCKET, Key: key });
+  const res = await client().send(command);
+  const body = res.Body;
+  if (!body) throw new Error(`S3 object empty: ${key}`);
+  return body.transformToByteArray();
 }
 
 /** Presigned GET URL so the results page can render the stored image. */
