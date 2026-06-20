@@ -14,9 +14,8 @@ import {
   Video,
   X,
 } from "lucide-react";
-import { SCENARIOS } from "@/lib/scenarios";
-import type { AnalyzeResponse, ScanMode, Scenario } from "@/lib/types";
-import { saveScan } from "@/lib/scanStore";
+import type { ScanMode } from "@/lib/types";
+import { setupRoom } from "@/lib/roomLibrary";
 import { extractVideoPreview, extractVideoScan } from "@/lib/videoFrames";
 
 type CaptureTab = ScanMode;
@@ -39,7 +38,7 @@ export default function ScanPage() {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const [scenario, setScenario] = useState<Scenario>("FIRE");
+  const [roomLabel, setRoomLabel] = useState("");
   const [captureTab, setCaptureTab] = useState<CaptureTab>("video360");
   const [photos, setPhotos] = useState<PhotoItem[]>([]);
   const [videoPreview, setVideoPreview] = useState<string | null>(null);
@@ -197,116 +196,45 @@ export default function ScanPage() {
     ? "border-emerald-400 bg-emerald-500/10 ring-2 ring-emerald-500/30"
     : "border-slate-700 bg-slate-900/40 hover:border-emerald-500/60 hover:bg-slate-900/70";
 
-  async function runPhotoAnalysis() {
-    if (photos.length === 0) return;
-
-    const previews = photos.map((p) => p.preview);
-
-    if (photos.length === 1) {
-      const uploaded = await uploadToS3(photos[0].file);
-      const payload = uploaded
-        ? {
-            scenario,
-            scanMode: "photo" as const,
-            imageKey: uploaded.key,
-            imageContentType: uploaded.contentType,
-          }
-        : { scenario, scanMode: "photo" as const, image: previews[0] };
-
-      const res = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body?.error ?? `Analysis failed (${res.status})`);
-      }
-
-      const result = (await res.json()) as AnalyzeResponse;
-      saveScan({
-        image: result.imageUrl ?? previews[0],
-        scanMode: "photo",
-        scenario,
-        result,
-        createdAt: Date.now(),
-      });
-      router.push("/results");
-      return;
-    }
-
-    const frameKeys = await uploadDataUrlsToS3(previews);
-    const payload = frameKeys
-      ? { scenario, scanMode: "photo" as const, frameKeys }
-      : { scenario, scanMode: "photo" as const, frames: previews };
-
-    const res = await fetch("/api/analyze", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body?.error ?? `Analysis failed (${res.status})`);
-    }
-
-    const result = (await res.json()) as AnalyzeResponse;
-    saveScan({
-      image: result.imageUrl ?? previews[0],
-      scanMode: "photo",
-      scenario,
-      result,
-      createdAt: Date.now(),
-    });
-    router.push("/results");
-  }
-
-  async function runVideoAnalysis() {
-    if (!videoPreview || !videoFile) return;
-
-    const scan = await extractVideoScan(videoFile);
-    const frameKeys = await uploadDataUrlsToS3(scan.frames);
-
-    const payload = frameKeys
-      ? { scenario, scanMode: "video360" as const, frameKeys }
-      : { scenario, scanMode: "video360" as const, frames: scan.frames };
-
-    const res = await fetch("/api/analyze", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body?.error ?? `Analysis failed (${res.status})`);
-    }
-
-    const result = (await res.json()) as AnalyzeResponse;
-    saveScan({
-      image: result.imageUrl ?? scan.panorama,
-      panorama: scan.panorama,
-      scanMode: "video360",
-      scenario,
-      result,
-      createdAt: Date.now(),
-    });
-    router.push("/results");
-  }
-
-  async function runAnalysis() {
-    if (!hasCapture) return;
+  async function runSetup() {
+    if (!hasCapture || !roomLabel.trim()) return;
     setLoading(true);
     setError(null);
 
     try {
       if (isPhoto) {
-        await runPhotoAnalysis();
+        const previews = photos.map((p) => p.preview);
+        if (photos.length === 1) {
+          const uploaded = await uploadToS3(photos[0].file);
+          await setupRoom({
+            label: roomLabel.trim(),
+            scanMode: "photo",
+            previewImage: previews[0],
+            ...(uploaded
+              ? { imageKey: uploaded.key, imageContentType: uploaded.contentType }
+              : { image: previews[0] }),
+          });
+        } else {
+          const frameKeys = await uploadDataUrlsToS3(previews);
+          await setupRoom({
+            label: roomLabel.trim(),
+            scanMode: "photo",
+            previewImage: previews[0],
+            ...(frameKeys ? { frameKeys } : { frames: previews }),
+          });
+        }
       } else {
-        await runVideoAnalysis();
+        const scan = await extractVideoScan(videoFile!);
+        const frameKeys = await uploadDataUrlsToS3(scan.frames);
+        await setupRoom({
+          label: roomLabel.trim(),
+          scanMode: "video360",
+          previewImage: videoPreview ?? scan.frames[0],
+          panorama: scan.panorama,
+          ...(frameKeys ? { frameKeys } : { frames: scan.frames }),
+        });
       }
+      router.push("/rooms");
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Something went wrong. Try again.",
@@ -321,7 +249,7 @@ export default function ScanPage() {
   }
 
   return (
-    <main className="bg-grid mx-auto flex min-h-screen w-full max-w-md flex-col px-5 pb-28 pt-6">
+    <main className="bg-grid mx-auto flex min-h-screen w-full max-w-md flex-col px-5 pb-36 pt-6">
       <header className="mb-6 flex items-center gap-3">
         <Link
           href="/"
@@ -331,56 +259,24 @@ export default function ScanPage() {
           <ArrowLeft className="h-5 w-5" />
         </Link>
         <div>
-          <h1 className="text-xl font-bold tracking-tight">Scan a space</h1>
+          <h1 className="text-xl font-bold tracking-tight">Set up a room</h1>
           <p className="text-sm text-slate-400">
-            Pick a scenario, then capture the room.
+            Label and scan — we&apos;ll map exits for every emergency.
           </p>
         </div>
       </header>
 
       <section className="mb-6">
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-widest text-slate-500">
-          1 · Emergency scenario
+          1 · Room name
         </h2>
-        <div
-          role="radiogroup"
-          aria-label="Emergency scenario"
-          className="grid grid-cols-3 gap-2"
-        >
-          {SCENARIOS.map((s) => {
-            const Icon = s.icon;
-            const selected = scenario === s.id;
-            return (
-              <button
-                key={s.id}
-                role="radio"
-                aria-checked={selected}
-                onClick={() => setScenario(s.id)}
-                className={`flex flex-col items-center gap-2 rounded-2xl border p-3 text-center transition ${
-                  selected
-                    ? `${s.accent.bg} ${s.accent.border} ${s.accent.glow}`
-                    : "border-slate-800 bg-slate-900/50 hover:border-slate-700"
-                }`}
-              >
-                <Icon
-                  className={`h-6 w-6 ${
-                    selected ? s.accent.text : "text-slate-400"
-                  }`}
-                />
-                <span
-                  className={`text-xs font-semibold ${
-                    selected ? "text-white" : "text-slate-300"
-                  }`}
-                >
-                  {s.label}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-        <p className="mt-2 text-xs text-slate-500">
-          {SCENARIOS.find((s) => s.id === scenario)?.description}
-        </p>
+        <input
+          type="text"
+          value={roomLabel}
+          onChange={(e) => setRoomLabel(e.target.value)}
+          placeholder="e.g. Room 201, Main office, Cafeteria"
+          className="w-full rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-3 text-sm text-slate-100 placeholder:text-slate-600 focus:border-emerald-500/60 focus:outline-none focus:ring-1 focus:ring-emerald-500/40"
+        />
       </section>
 
       <section className="mb-6">
@@ -579,30 +475,28 @@ export default function ScanPage() {
         </p>
       ) : null}
 
-      <div className="fixed inset-x-0 bottom-0 mx-auto w-full max-w-md border-t border-slate-800 bg-slate-950/90 px-5 py-4 backdrop-blur">
+      <div className="fixed inset-x-0 bottom-20 mx-auto w-full max-w-md border-t border-slate-800 bg-slate-950/90 px-5 py-4 backdrop-blur">
         <button
-          onClick={runAnalysis}
-          disabled={!hasCapture || loading}
+          onClick={runSetup}
+          disabled={!hasCapture || !roomLabel.trim() || loading}
           className="flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-500 py-4 text-base font-bold text-slate-950 shadow-neon transition active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400 disabled:shadow-none"
         >
           {loading ? (
             <>
               <Loader2 className="h-5 w-5 animate-spin" />
-              Analyzing space…
+              Mapping room (all scenarios)…
             </>
           ) : (
             <>
               <ScanLine className="h-5 w-5" />
-              Run Spatial Analysis
+              Save room &amp; build plans
             </>
           )}
         </button>
-        {!hasCapture ? (
+        {!hasCapture || !roomLabel.trim() ? (
           <p className="mt-2 flex items-center justify-center gap-1 text-center text-xs text-slate-500">
             <ImageUp className="h-3.5 w-3.5" />
-            {isPhoto
-              ? "Add one or more photos to enable analysis"
-              : "Record or upload a 360° video to enable analysis"}
+            Add a room name and capture media to continue
           </p>
         ) : null}
       </div>

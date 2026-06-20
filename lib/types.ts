@@ -75,6 +75,27 @@ export interface RoomModel {
 
 export type ScanMode = "photo" | "video360";
 
+/** Pre-computed emergency plans keyed by scenario. */
+export type ScenarioPlans = Record<Scenario, AnalysisResult>;
+
+/** A labeled room saved during setup for emergency lookup. */
+export interface SavedRoom {
+  id: string;
+  label: string;
+  image: string;
+  panorama?: string;
+  scanMode: ScanMode;
+  plans: ScenarioPlans;
+  createdAt: number;
+}
+
+export interface SetupRoomRequest extends Omit<AnalyzeRequest, "scenario"> {
+  label: string;
+  /** Display image when S3 presign is unavailable. */
+  previewImage?: string;
+  panorama?: string;
+}
+
 export interface AnalysisResult {
   egress_points: EgressPoint[];
   hazards: Hazard[];

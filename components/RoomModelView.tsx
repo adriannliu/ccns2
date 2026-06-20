@@ -1,10 +1,12 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import type { LandmarkType, Point2D, RoomModel } from "@/lib/types";
+import type { LandmarkType, Point2D, RoomModel, Scenario } from "@/lib/types";
 
 interface RoomModelViewProps {
   model: RoomModel;
+  /** When set, tailors path/labels for the active emergency. */
+  scenario?: Scenario;
   className?: string;
 }
 
@@ -50,13 +52,29 @@ function pathD(points: Point2D[]): string {
   );
 }
 
-export default function RoomModelView({ model, className = "" }: RoomModelViewProps) {
+export default function RoomModelView({
+  model,
+  scenario,
+  className = "",
+}: RoomModelViewProps) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
 
-  const exitPath = useMemo(
-    () => model.exit_path.filter((p) => p.length === 2),
-    [model.exit_path],
-  );
+  const showExitPath =
+    !scenario || scenario === "FIRE" || scenario === "CODE_RED";
+
+  const exitPath = useMemo(() => {
+    if (!showExitPath) return [];
+    return model.exit_path.filter((p) => p.length === 2);
+  }, [model.exit_path, showExitPath]);
+
+  const subtitle =
+    scenario === "FIRE"
+      ? "Follow the dotted line to the nearest exit."
+      : scenario === "EARTHQUAKE"
+        ? "Head to marked cover zones — do not use exit paths while shaking."
+        : scenario === "CODE_RED"
+          ? "Move to concealment along the dotted path."
+          : "Stitched from your 360° scan — follow the dotted line to the exit.";
   const origin = useMemo(() => pt(model.scan_origin), [model.scan_origin]);
 
   return (
@@ -67,9 +85,7 @@ export default function RoomModelView({ model, className = "" }: RoomModelViewPr
         <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">
           Room model · top-down
         </p>
-        <p className="text-xs text-slate-400">
-          Stitched from your 360° scan — follow the dotted line to the exit.
-        </p>
+        <p className="text-xs text-slate-400">{subtitle}</p>
       </div>
 
       <svg
