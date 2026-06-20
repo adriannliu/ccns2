@@ -41,11 +41,47 @@ export interface SafeZone {
   coordinates: BBox;
 }
 
+/** Normalized [x, y] point on a top-down floor plan (0 = left/top, 1 = right/bottom). */
+export type Point2D = [number, number];
+
+export type LandmarkType =
+  | "exit"
+  | "door"
+  | "window"
+  | "hazard"
+  | "safe_zone"
+  | "furniture";
+
+export interface RoomLandmark {
+  label: string;
+  type: LandmarkType;
+  position: Point2D;
+  detail?: string;
+}
+
+/**
+ * Synthesized top-down room model stitched from a 360° video scan.
+ * Coordinates are normalized to the floor-plan view box (0–1).
+ */
+export interface RoomModel {
+  /** Wall segments as line pairs [[x1,y1],[x2,y2]]. */
+  walls: Point2D[][];
+  landmarks: RoomLandmark[];
+  /** Dotted exit route from scan origin to the primary exit. */
+  exit_path: Point2D[];
+  /** Where the person stood when they started the pan. */
+  scan_origin: Point2D;
+}
+
+export type ScanMode = "photo" | "video360";
+
 export interface AnalysisResult {
   egress_points: EgressPoint[];
   hazards: Hazard[];
   safe_zones: SafeZone[];
   actionable_instructions: string[];
+  /** Present when the scan was built from a 360° video. */
+  room_model?: RoomModel;
 }
 
 /**
@@ -56,19 +92,28 @@ export interface AnalysisResult {
  */
 export interface AnalyzeRequest {
   scenario: Scenario;
+  /** How the scan was captured. */
+  scanMode?: ScanMode;
   /** S3 object key of an already-uploaded scan image. */
   imageKey?: string;
   /** Browser content type of the uploaded image (e.g. "image/jpeg"). */
   imageContentType?: string;
   /** Inline base64 data URL / raw base64 (fallback when S3 is unavailable). */
   image?: string;
+  /** Sampled JPEG frames from a 360° video (inline base64 data URLs). */
+  frames?: string[];
+  /** S3 keys for frames already uploaded (preferred for large scans). */
+  frameKeys?: string[];
 }
 
 /** Response returned by /api/analyze. */
 export interface AnalyzeResponse extends AnalysisResult {
   scenario: Scenario;
+  scanMode?: ScanMode;
   /** Displayable image URL (presigned S3 GET) when the scan came from S3. */
   imageUrl?: string;
+  /** Stitched panorama data URL or presigned URL for 360° scans. */
+  panoramaUrl?: string;
   /** Result of persisting the scan to Butterbase. */
   saved: {
     success: boolean;

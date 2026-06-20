@@ -53,12 +53,22 @@ export function contentTypeToImageFormat(
 }
 
 function extForContentType(contentType: string | undefined): string {
+  const ct = (contentType ?? "").toLowerCase();
+  if (ct.startsWith("video/")) {
+    if (ct.includes("quicktime") || ct.includes("mov")) return "mov";
+    return "mp4";
+  }
   return contentTypeToImageFormat(contentType);
 }
 
 /** Generate a fresh, namespaced object key for a new upload. */
 export function newScanKey(contentType: string | undefined): string {
   return `${PREFIX}/${randomUUID()}.${extForContentType(contentType)}`;
+}
+
+/** Generate keys for sampled video frames. */
+export function newFrameKey(index: number): string {
+  return `${PREFIX}/frames/${randomUUID()}-${index}.jpeg`;
 }
 
 /** Presigned PUT URL the browser uses to upload the photo directly to S3. */

@@ -13,6 +13,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import ImageOverlay from "@/components/ImageOverlay";
+import RoomModelView from "@/components/RoomModelView";
 import { getScenario } from "@/lib/scenarios";
 import { loadScan, type StoredScan } from "@/lib/scanStore";
 import type { AccessibilityStatus, EffectivenessRating } from "@/lib/types";
@@ -90,9 +91,31 @@ export default function ResultsPage() {
         ) : null}
       </header>
 
-      {/* Overlay */}
-      <section className="mb-4">
-        <ImageOverlay imageSrc={scan.image} result={result} />
+      {/* Spatial view */}
+      <section className="mb-4 space-y-4">
+        {result.room_model ? (
+          <RoomModelView model={result.room_model} />
+        ) : null}
+
+        {scan.panorama ? (
+          <div className="overflow-hidden rounded-2xl border border-slate-800">
+            <p className="border-b border-slate-800 px-4 py-2 text-xs font-semibold uppercase tracking-widest text-slate-500">
+              360° panorama strip
+            </p>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={scan.panorama}
+              alt="Stitched 360° room panorama"
+              className="max-h-40 w-full object-cover object-center"
+            />
+          </div>
+        ) : null}
+
+        <ImageOverlay
+          imageSrc={scan.image}
+          result={result}
+          maxHeightClass="max-h-[50vh]"
+        />
       </section>
 
       {/* Legend / counts */}

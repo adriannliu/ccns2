@@ -31,9 +31,9 @@ export async function POST(req: Request) {
   }
 
   const contentType = body.contentType || "image/jpeg";
-  if (!contentType.startsWith("image/")) {
+  if (!contentType.startsWith("image/") && !contentType.startsWith("video/")) {
     return NextResponse.json(
-      { error: "contentType must be an image/* type." },
+      { error: "contentType must be image/* or video/*." },
       { status: 400 },
     );
   }

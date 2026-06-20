@@ -10,12 +10,15 @@ import {
   Loader2,
   RefreshCw,
   ScanLine,
+  Video,
 } from "lucide-react";
 import { SCENARIOS } from "@/lib/scenarios";
-import type { AnalyzeResponse, Scenario } from "@/lib/types";
+import type { AnalyzeResponse, ScanMode, Scenario } from "@/lib/types";
 import { saveScan } from "@/lib/scanStore";
+import { extractVideoPreview, extractVideoScan } from "@/lib/videoFrames";
 
-/** Read a File into a base64 data URL. */
+type CaptureTab = ScanMode;
+
 function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -30,41 +33,73 @@ export default function ScanPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [scenario, setScenario] = useState<Scenario>("FIRE");
-  const [image, setImage] = useState<string | null>(null);
+  const [captureTab, setCaptureTab] = useState<CaptureTab>("photo");
+  const [preview, setPreview] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
 
-  async function loadImageFile(file: File) {
-    if (!file.type.startsWith("image/")) {
+  function clearCapture() {
+    setPreview(null);
+    setFile(null);
+    setError(null);
+  }
+
+  function switchTab(tab: CaptureTab) {
+    if (tab === captureTab) return;
+    setCaptureTab(tab);
+    clearCapture();
+  }
+
+  async function loadPhotoFile(next: File) {
+    if (!next.type.startsWith("image/")) {
       setError("Please use an image file (JPEG, PNG, etc.).");
       return;
     }
     setError(null);
     try {
-      const dataUrl = await fileToDataUrl(file);
-      setImage(dataUrl);
-      setFile(file);
+      const dataUrl = await fileToDataUrl(next);
+      setPreview(dataUrl);
+      setFile(next);
     } catch {
       setError("Could not read that image. Try another photo.");
     }
   }
 
-  /**
-   * Upload the photo straight to S3 via a presigned URL. Returns the object key
-   * on success, or null when S3 isn't configured (caller falls back to base64).
-   */
+  async function loadVideoFile(next: File) {
+    if (!next.type.startsWith("video/")) {
+      setError("Please use a video file (iPhone MOV or MP4).");
+      return;
+    }
+    setError(null);
+    try {
+      const frame = await extractVideoPreview(next);
+      setPreview(frame);
+      setFile(next);
+    } catch {
+      setError("Could not read that video. Try another recording.");
+    }
+  }
+
+  async function loadFile(next: File) {
+    if (captureTab === "photo") {
+      await loadPhotoFile(next);
+    } else {
+      await loadVideoFile(next);
+    }
+  }
+
   async function uploadToS3(
-    file: File,
+    blob: File,
   ): Promise<{ key: string; contentType: string } | null> {
     const presign = await fetch("/api/upload", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ contentType: file.type }),
+      body: JSON.stringify({ contentType: blob.type || "image/jpeg" }),
     });
 
-    if (presign.status === 501) return null; // S3 not configured -> fallback
+    if (presign.status === 501) return null;
     if (!presign.ok) {
       const body = await presign.json().catch(() => ({}));
       throw new Error(body?.error ?? `Upload URL failed (${presign.status})`);
@@ -79,7 +114,7 @@ export default function ScanPage() {
     const put = await fetch(uploadUrl, {
       method: "PUT",
       headers: { "Content-Type": contentType },
-      body: file,
+      body: blob,
     });
     if (!put.ok) {
       throw new Error(`S3 upload failed (${put.status})`);
@@ -88,10 +123,26 @@ export default function ScanPage() {
     return { key, contentType };
   }
 
+  async function uploadFramesToS3(
+    frames: string[],
+  ): Promise<string[] | null> {
+    const keys: string[] = [];
+    for (let i = 0; i < frames.length; i++) {
+      const res = await fetch(frames[i]);
+      const blob = await res.blob();
+      const uploaded = await uploadToS3(
+        new File([blob], `frame-${i}.jpeg`, { type: "image/jpeg" }),
+      );
+      if (!uploaded) return null;
+      keys.push(uploaded.key);
+    }
+    return keys;
+  }
+
   async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    await loadImageFile(file);
+    const next = e.target.files?.[0];
+    if (!next) return;
+    await loadFile(next);
     e.target.value = "";
   }
 
@@ -116,52 +167,93 @@ export default function ScanPage() {
     e.preventDefault();
     e.stopPropagation();
     setDragOver(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file) void loadImageFile(file);
+    const next = e.dataTransfer.files?.[0];
+    if (next) void loadFile(next);
   }
 
   const dropZoneActive = dragOver
     ? "border-emerald-400 bg-emerald-500/10 ring-2 ring-emerald-500/30"
     : "border-slate-700 bg-slate-900/40 hover:border-emerald-500/60 hover:bg-slate-900/70";
 
+  async function runPhotoAnalysis() {
+    if (!preview || !file) return;
+
+    const uploaded = await uploadToS3(file);
+    const payload = uploaded
+      ? {
+          scenario,
+          scanMode: "photo" as const,
+          imageKey: uploaded.key,
+          imageContentType: uploaded.contentType,
+        }
+      : { scenario, scanMode: "photo" as const, image: preview };
+
+    const res = await fetch("/api/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body?.error ?? `Analysis failed (${res.status})`);
+    }
+
+    const result = (await res.json()) as AnalyzeResponse;
+    saveScan({
+      image: result.imageUrl ?? preview,
+      scanMode: "photo",
+      scenario,
+      result,
+      createdAt: Date.now(),
+    });
+    router.push("/results");
+  }
+
+  async function runVideoAnalysis() {
+    if (!preview || !file) return;
+
+    const scan = await extractVideoScan(file);
+    const frameKeys = await uploadFramesToS3(scan.frames);
+
+    const payload = frameKeys
+      ? { scenario, scanMode: "video360" as const, frameKeys }
+      : { scenario, scanMode: "video360" as const, frames: scan.frames };
+
+    const res = await fetch("/api/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body?.error ?? `Analysis failed (${res.status})`);
+    }
+
+    const result = (await res.json()) as AnalyzeResponse;
+    saveScan({
+      image: result.imageUrl ?? scan.panorama,
+      panorama: scan.panorama,
+      scanMode: "video360",
+      scenario,
+      result,
+      createdAt: Date.now(),
+    });
+    router.push("/results");
+  }
+
   async function runAnalysis() {
-    if (!image || !file) return;
+    if (!preview || !file) return;
     setLoading(true);
     setError(null);
 
     try {
-      // 1. Try direct-to-S3 upload; fall back to inline base64 if unavailable.
-      const uploaded = await uploadToS3(file);
-
-      const payload = uploaded
-        ? {
-            scenario,
-            imageKey: uploaded.key,
-            imageContentType: uploaded.contentType,
-          }
-        : { scenario, image };
-
-      // 2. Run the spatial analysis.
-      const res = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body?.error ?? `Analysis failed (${res.status})`);
+      if (captureTab === "photo") {
+        await runPhotoAnalysis();
+      } else {
+        await runVideoAnalysis();
       }
-
-      const result = (await res.json()) as AnalyzeResponse;
-      // Prefer the presigned S3 URL for display; fall back to the local preview.
-      saveScan({
-        image: result.imageUrl ?? image,
-        scenario,
-        result,
-        createdAt: Date.now(),
-      });
-      router.push("/results");
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Something went wrong. Try again.",
@@ -169,6 +261,8 @@ export default function ScanPage() {
       setLoading(false);
     }
   }
+
+  const isPhoto = captureTab === "photo";
 
   return (
     <main className="bg-grid mx-auto flex min-h-screen w-full max-w-md flex-col px-5 pb-28 pt-6">
@@ -241,16 +335,52 @@ export default function ScanPage() {
           2 · Capture the room
         </h2>
 
+        {/* Photo / Video tabs */}
+        <div
+          role="tablist"
+          aria-label="Capture type"
+          className="mb-3 grid grid-cols-2 gap-2 rounded-xl border border-slate-800 bg-slate-900/50 p-1"
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={isPhoto}
+            onClick={() => switchTab("photo")}
+            className={`flex items-center justify-center gap-2 rounded-lg py-2.5 text-sm font-semibold transition ${
+              isPhoto
+                ? "bg-emerald-500 text-slate-950 shadow-neon"
+                : "text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            <Camera className="h-4 w-4" />
+            Photo
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={!isPhoto}
+            onClick={() => switchTab("video360")}
+            className={`flex items-center justify-center gap-2 rounded-lg py-2.5 text-sm font-semibold transition ${
+              !isPhoto
+                ? "bg-emerald-500 text-slate-950 shadow-neon"
+                : "text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            <Video className="h-4 w-4" />
+            Video
+          </button>
+        </div>
+
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/*"
+          accept={isPhoto ? "image/*" : "video/*"}
           capture="environment"
           onChange={handleFile}
           className="hidden"
         />
 
-        {!image ? (
+        {!preview ? (
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
@@ -260,12 +390,24 @@ export default function ScanPage() {
             onDrop={handleDrop}
             className={`flex w-full flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed py-14 text-slate-300 transition ${dropZoneActive}`}
           >
-            <Camera className="h-10 w-10 text-emerald-400" />
+            {isPhoto ? (
+              <Camera className="h-10 w-10 text-emerald-400" />
+            ) : (
+              <Video className="h-10 w-10 text-emerald-400" />
+            )}
             <span className="font-semibold">
-              {dragOver ? "Drop image here" : "Open camera"}
+              {dragOver
+                ? isPhoto
+                  ? "Drop image here"
+                  : "Drop video here"
+                : isPhoto
+                  ? "Open camera"
+                  : "Record 360° scan"}
             </span>
-            <span className="text-xs text-slate-500">
-              tap to choose a photo, or drag and drop
+            <span className="max-w-[260px] text-center text-xs text-slate-500">
+              {isPhoto
+                ? "tap to choose a photo, or drag and drop"
+                : "slowly pan a full circle around the room, or upload a video"}
             </span>
           </button>
         ) : (
@@ -283,7 +425,7 @@ export default function ScanPage() {
             >
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src={image}
+                src={preview}
                 alt="Room preview"
                 className="max-h-[55vh] w-full object-contain"
               />
@@ -316,7 +458,7 @@ export default function ScanPage() {
       <div className="fixed inset-x-0 bottom-0 mx-auto w-full max-w-md border-t border-slate-800 bg-slate-950/90 px-5 py-4 backdrop-blur">
         <button
           onClick={runAnalysis}
-          disabled={!image || loading}
+          disabled={!preview || loading}
           className="flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-500 py-4 text-base font-bold text-slate-950 shadow-neon transition active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400 disabled:shadow-none"
         >
           {loading ? (
@@ -331,10 +473,12 @@ export default function ScanPage() {
             </>
           )}
         </button>
-        {!image ? (
+        {!preview ? (
           <p className="mt-2 flex items-center justify-center gap-1 text-center text-xs text-slate-500">
             <ImageUp className="h-3.5 w-3.5" />
-            Capture, choose, or drag in a photo to enable analysis
+            {isPhoto
+              ? "Capture, choose, or drag in a photo to enable analysis"
+              : "Record or upload a 360° video to enable analysis"}
           </p>
         ) : null}
       </div>

@@ -14,6 +14,8 @@ let memoryScan: StoredScan | null = null;
 
 export interface StoredScan {
   image: string;
+  panorama?: string;
+  scanMode?: "photo" | "video360";
   scenario: Scenario;
   result: AnalyzeResponse;
   createdAt: number;

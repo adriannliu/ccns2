@@ -16,18 +16,13 @@ import type {
   AnalysisResult,
   AnalyzeRequest,
   AnalyzeResponse,
+  RoomModel,
   Scenario,
 } from "@/lib/types";
 
 export const runtime = "nodejs";
 
-// ---------------------------------------------------------------------------
-// SYSTEM PROMPT
-// ---------------------------------------------------------------------------
-// Spatial Emergency VLM contract (see AGENTS.md). Claude has no json_object
-// flag, so the prompt itself enforces raw-JSON-only output. The active scenario
-// (FIRE / EARTHQUAKE / CODE_RED) is supplied in the user message.
-const SYSTEM_PROMPT = `You are SafeSpace, a Spatial Emergency Intelligence system. You analyze a single photograph of an indoor space and produce a life-safety plan for a specific emergency scenario: FIRE, EARTHQUAKE, or CODE_RED (active threat / lockdown). The scenario is given in the user's message.
+const SYSTEM_PROMPT_PHOTO = `You are SafeSpace, a Spatial Emergency Intelligence system. You analyze a single photograph of an indoor space and produce a life-safety plan for a specific emergency scenario: FIRE, EARTHQUAKE, or CODE_RED (active threat / lockdown). The scenario is given in the user's message.
 
 YOUR JOB
 Identify, from what is actually visible in the image:
@@ -44,51 +39,70 @@ Every region MUST include "coordinates" as a bounding box of four normalized num
 - Only annotate things you can actually see in the image. Never invent objects or guess locations off-screen.
 
 SCENARIO REASONING
-- FIRE: Prefer low, smoke-free egress. Treat flammable/electrical items, blocked or hot doorways, and glass as hazards. Doors that likely lead outside are higher value than interior windows above ground level.
-- EARTHQUAKE: Best safe_zones are sturdy cover ("Drop & Cover" under solid desks/tables, or "Cover" beside load-bearing structure). Hazards are anything that can fall, shatter, or topple (windows, shelves, mirrors, tall/unsecured furniture, hanging objects). Do NOT recommend doorways or exiting during shaking.
-- CODE_RED: Best safe_zones are concealment ("Hiding Spot") out of sightline from doors/windows, and lockable/barricadable cover. Hazards are anything that exposes the occupant to a line of sight from entry points. De-prioritize using doors/windows as exits unless clearly safe.
+- FIRE: Prefer low, smoke-free egress. Treat flammable/electrical items, blocked or hot doorways, and glass as hazards.
+- EARTHQUAKE: Best safe_zones are sturdy cover. Hazards are anything that can fall, shatter, or topple. Do NOT recommend exiting during shaking.
+- CODE_RED: Best safe_zones are concealment out of sightline from doors/windows. De-prioritize using doors/windows as exits unless clearly safe.
 
 OUTPUT FORMAT
-Return ONLY a single raw JSON object. No prose, no explanation, no markdown, no code fences. The object MUST match exactly this schema:
+Return ONLY a single raw JSON object. No prose, no markdown, no code fences. Schema:
 
 {
-  "egress_points": [
-    {
-      "type": "Primary Door" | "Secondary Door" | "Window",
-      "coordinates": [ymin, xmin, ymax, xmax],
-      "accessibility_status": "Clear" | "Partially Blocked" | "Blocked"
-    }
-  ],
-  "hazards": [
-    {
-      "description": "short label of the hazard, e.g. 'Glass window'",
-      "reason": "why it is dangerous in this scenario",
-      "coordinates": [ymin, xmin, ymax, xmax]
-    }
-  ],
-  "safe_zones": [
-    {
-      "type": "Hiding Spot" | "Cover" | "Drop & Cover",
-      "description": "short label, e.g. 'Under the wooden desk'",
-      "effectiveness_rating": "High" | "Medium" | "Low",
-      "coordinates": [ymin, xmin, ymax, xmax]
-    }
-  ],
-  "actionable_instructions": [
-    "Step 1 ...",
-    "Step 2 ..."
-  ]
+  "egress_points": [{ "type": "Primary Door"|"Secondary Door"|"Window", "coordinates": [ymin,xmin,ymax,xmax], "accessibility_status": "Clear"|"Partially Blocked"|"Blocked" }],
+  "hazards": [{ "description": "...", "reason": "...", "coordinates": [ymin,xmin,ymax,xmax] }],
+  "safe_zones": [{ "type": "Hiding Spot"|"Cover"|"Drop & Cover", "description": "...", "effectiveness_rating": "High"|"Medium"|"Low", "coordinates": [ymin,xmin,ymax,xmax] }],
+  "actionable_instructions": ["Step 1 ...", "Step 2 ..."]
 }
 
 RULES
-- Use ONLY the enum values shown above, spelled and capitalized exactly. Pick the closest "type" when the literal item differs (e.g. a back/side exit -> "Secondary Door").
-- Choose exactly one main exit and label it "Primary Door"; any additional exits use "Secondary Door" or "Window".
-- Any array may be empty ([]) if nothing of that kind is visible. Never omit a key.
-- actionable_instructions: 3-6 short, imperative, scenario-specific steps, ordered by what to do first. Reference the regions you identified (e.g. "Take cover under the desk on the right").
-- Keep descriptions concise (a few words). Do not include coordinates inside text fields.
-- Output must be valid JSON parseable by JSON.parse. Do not add trailing commas or comments.`;
+- Use ONLY the enum values shown, spelled exactly.
+- Choose exactly one main exit as "Primary Door".
+- 3-6 imperative actionable_instructions.
+- Output must be valid JSON.`;
 
-// Per-scenario user instruction appended after the image.
+const SYSTEM_PROMPT_VIDEO360 = `You are SafeSpace, a Spatial Emergency Intelligence system. You receive several sequential frames from a slow 360° room scan (iPhone video). The frames progress clockwise around the room from where the person stood.
+
+YOUR JOB
+1. Mentally stitch the frames into a complete picture of the room.
+2. Build a synthesized TOP-DOWN floor plan (room_model) with walls, labeled landmarks, and a safe exit path.
+3. Also return per-frame-style egress_points, hazards, safe_zones on the FIRST frame (the scan start view) for overlay compatibility.
+4. actionable_instructions - ordered survival steps referencing landmarks and the exit path.
+
+COORDINATE SYSTEMS
+A) Image bboxes (egress_points, hazards, safe_zones): [ymin, xmin, ymax, xmax] normalized 0-1 on the FIRST frame only.
+B) Room model (top-down floor plan, bird's eye):
+   - All x/y values normalized 0.0-1.0 where (0,0) is top-left of the floor plan, (1,1) is bottom-right.
+   - walls: array of segments, each [[x1,y1],[x2,y2]].
+   - landmarks: { label, type, position: [x,y], detail? }
+     type must be one of: "exit", "door", "window", "hazard", "safe_zone", "furniture"
+   - exit_path: array of [x,y] waypoints from scan_origin to the primary exit, routing around hazards/furniture when possible (at least 3 points).
+   - scan_origin: [x,y] where the person stood when they started the pan (usually near center-bottom of the floor plan).
+
+SCENARIO REASONING
+- FIRE: exit_path to nearest clear, low egress; mark flammable hazards.
+- EARTHQUAKE: exit_path optional/secondary; emphasize safe_zone landmarks; hazards are falling objects.
+- CODE_RED: exit_path to concealment, NOT through open doors; mark sightline hazards.
+
+OUTPUT FORMAT — raw JSON only, no markdown:
+
+{
+  "egress_points": [...],
+  "hazards": [...],
+  "safe_zones": [...],
+  "actionable_instructions": [...],
+  "room_model": {
+    "walls": [[[x1,y1],[x2,y2]], ...],
+    "landmarks": [{ "label": "Main door", "type": "exit", "position": [x,y], "detail": "Clear" }],
+    "exit_path": [[x,y], ...],
+    "scan_origin": [x,y]
+  }
+}
+
+RULES
+- room_model is REQUIRED for 360° scans. Include at least 4 wall segments and 3 landmarks.
+- exit_path must have 3+ points with a dotted-route feel (not a straight line through furniture).
+- Label important objects: doors, windows, desks, shelves, fire hazards, hiding spots.
+- Never omit keys. Arrays may be empty only where noted above.`;
+
 const SCENARIO_INSTRUCTIONS: Record<Scenario, string> = {
   FIRE: "Scenario: FIRE. Prioritize low, smoke-free egress and avoid flammable hazards.",
   EARTHQUAKE:
@@ -97,26 +111,21 @@ const SCENARIO_INSTRUCTIONS: Record<Scenario, string> = {
     "Scenario: CODE_RED. Prioritize concealment/hiding spots and lockable barriers; avoid line-of-sight to doors/windows.",
 };
 
-// ---------------------------------------------------------------------------
-// AWS Bedrock — Claude Sonnet 4.5 via the Converse API
-// ---------------------------------------------------------------------------
 const AWS_REGION = process.env.AWS_REGION ?? "us-east-1";
 const BEDROCK_MODEL_ID =
   process.env.BEDROCK_MODEL_ID ??
   "us.anthropic.claude-sonnet-4-5-20250929-v1:0";
 
-// AGENTS.md inference parameters.
 const TEMPERATURE = 0.1;
-const MAX_TOKENS = 1024;
+const MAX_TOKENS_PHOTO = 1024;
+const MAX_TOKENS_VIDEO = 4096;
 
-/** Bedrock auth comes from the standard AWS credential chain. */
 function hasAwsCredentials(): boolean {
   return Boolean(
     process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY,
   );
 }
 
-/** Parse a base64 (data URL or raw) image into bytes + Bedrock image format. */
 function parseImage(image: string): { bytes: Uint8Array; format: ImageFormat } {
   let format: ImageFormat = "jpeg";
   let base64 = image;
@@ -127,17 +136,12 @@ function parseImage(image: string): { bytes: Uint8Array; format: ImageFormat } {
     format = ext === "jpg" ? "jpeg" : (ext as ImageFormat);
     base64 = match[2];
   } else if (image.startsWith("data:")) {
-    // Unknown data URL prefix — strip everything up to the comma.
     base64 = image.slice(image.indexOf(",") + 1);
   }
 
   return { bytes: new Uint8Array(Buffer.from(base64, "base64")), format };
 }
 
-/**
- * Extract a JSON object from a model response that may include stray prose or
- * markdown code fences, then parse it.
- */
 function extractJson(text: string): unknown {
   const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(text);
   const candidate = fenced ? fenced[1] : text;
@@ -149,12 +153,14 @@ function extractJson(text: string): unknown {
   return JSON.parse(candidate.slice(start, end + 1));
 }
 
-/** Where the scan image lives: an uploaded S3 object or inline base64. */
 type ImageSource =
   | { kind: "s3"; key: string; contentType?: string }
   | { kind: "inline"; image: string };
 
-/** Build the Bedrock image content block for the given source. */
+type AnalyzeInput =
+  | { mode: "photo"; source: ImageSource }
+  | { mode: "video360"; sources: ImageSource[] };
+
 function toImageBlock(source: ImageSource): ContentBlock {
   if (source.kind === "s3") {
     return {
@@ -169,26 +175,40 @@ function toImageBlock(source: ImageSource): ContentBlock {
 }
 
 async function callVisionModel(
-  source: ImageSource,
+  input: AnalyzeInput,
   scenario: Scenario,
 ): Promise<AnalysisResult> {
-  // No AWS creds -> deterministic mock so the flow is demoable offline.
   if (!hasAwsCredentials()) {
-    return mockAnalysis(scenario);
+    return input.mode === "video360"
+      ? mockVideoAnalysis(scenario)
+      : mockAnalysis(scenario);
   }
 
   const client = new BedrockRuntimeClient({ region: AWS_REGION });
+  const isVideo = input.mode === "video360";
 
   const content: ContentBlock[] = [
-    { text: SCENARIO_INSTRUCTIONS[scenario] },
-    toImageBlock(source),
+    {
+      text: isVideo
+        ? `${SCENARIO_INSTRUCTIONS[scenario]}\n\nThese ${input.sources.length} frames are sequential slices of a 360° room scan, ordered left-to-right around the room. Synthesize the full room and return the room_model floor plan.`
+        : SCENARIO_INSTRUCTIONS[scenario],
+    },
+    ...(isVideo
+      ? input.sources.flatMap((src, i) => [
+          { text: `Frame ${i + 1} of ${input.sources.length}:` },
+          toImageBlock(src),
+        ])
+      : [toImageBlock(input.source)]),
   ];
 
   const command = new ConverseCommand({
     modelId: BEDROCK_MODEL_ID,
-    system: [{ text: SYSTEM_PROMPT }],
+    system: [{ text: isVideo ? SYSTEM_PROMPT_VIDEO360 : SYSTEM_PROMPT_PHOTO }],
     messages: [{ role: "user", content }],
-    inferenceConfig: { temperature: TEMPERATURE, maxTokens: MAX_TOKENS },
+    inferenceConfig: {
+      temperature: TEMPERATURE,
+      maxTokens: isVideo ? MAX_TOKENS_VIDEO : MAX_TOKENS_PHOTO,
+    },
   });
 
   const response = await client.send(command);
@@ -200,26 +220,26 @@ async function callVisionModel(
   return normalizeResult(extractJson(text) as Partial<AnalysisResult>);
 }
 
-/** Defensive normalization so the frontend always gets the full shape. */
+function normalizeRoomModel(raw: Partial<RoomModel> | undefined): RoomModel | undefined {
+  if (!raw) return undefined;
+  return {
+    walls: raw.walls ?? [],
+    landmarks: raw.landmarks ?? [],
+    exit_path: raw.exit_path ?? [],
+    scan_origin: raw.scan_origin ?? [0.5, 0.82],
+  };
+}
+
 function normalizeResult(raw: Partial<AnalysisResult>): AnalysisResult {
   return {
     egress_points: raw.egress_points ?? [],
     hazards: raw.hazards ?? [],
     safe_zones: raw.safe_zones ?? [],
     actionable_instructions: raw.actionable_instructions ?? [],
+    room_model: normalizeRoomModel(raw.room_model),
   };
 }
 
-// ---------------------------------------------------------------------------
-// Butterbase persistence (stub)
-// ---------------------------------------------------------------------------
-/**
- * Simulates saving a completed scan to Butterbase.
- *
- * When real Butterbase credentials are present (BUTTERBASE_API_URL/KEY) this
- * performs an actual insert via the generic client; otherwise it returns a
- * simulated success so the demo flow is never blocked.
- */
 async function saveScanToButterbase(data: {
   scenario: Scenario;
   result: AnalysisResult;
@@ -235,17 +255,13 @@ async function saveScanToButterbase(data: {
     return { success: true, id: res.id };
   }
 
-  // Simulated success fallback (no credentials configured yet).
   return {
     success: true,
     id: `mock_${Date.now()}`,
-    error: res.error, // surfaced for visibility; safe to ignore in demo
+    error: res.error,
   };
 }
 
-// ---------------------------------------------------------------------------
-// POST /api/analyze
-// ---------------------------------------------------------------------------
 export async function POST(req: Request) {
   let body: AnalyzeRequest;
   try {
@@ -254,19 +270,47 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
   }
 
-  const { image, imageKey, imageContentType, scenario } = body;
+  const { image, imageKey, imageContentType, frames, frameKeys, scenario } =
+    body;
+  const scanMode =
+    body.scanMode ??
+    (frames?.length || frameKeys?.length ? "video360" : "photo");
 
   if (!["FIRE", "EARTHQUAKE", "CODE_RED"].includes(scenario)) {
     return NextResponse.json({ error: "Invalid `scenario`." }, { status: 400 });
   }
 
-  // Prefer the S3 reference; fall back to inline base64.
-  let source: ImageSource;
+  let input: AnalyzeInput;
   let imageUrl: string | undefined;
-  if (imageKey && isS3Configured()) {
-    source = { kind: "s3", key: imageKey, contentType: imageContentType };
+  let panoramaUrl: string | undefined;
+
+  if (scanMode === "video360") {
+    if (frameKeys?.length && isS3Configured()) {
+      input = {
+        mode: "video360",
+        sources: frameKeys.map((key) => ({
+          kind: "s3" as const,
+          key,
+          contentType: "image/jpeg",
+        })),
+      };
+      imageUrl = await createDownloadUrl(frameKeys[0]).catch(() => undefined);
+    } else if (frames?.length) {
+      input = {
+        mode: "video360",
+        sources: frames.map((f) => ({ kind: "inline" as const, image: f })),
+      };
+      panoramaUrl = frames.length > 1 ? undefined : frames[0];
+    } else {
+      return NextResponse.json(
+        { error: "Provide `frames` or `frameKeys` for a 360° video scan." },
+        { status: 400 },
+      );
+    }
+  } else if (imageKey && isS3Configured()) {
+    input = { mode: "photo", source: { kind: "s3", key: imageKey, contentType: imageContentType } };
   } else if (image && typeof image === "string") {
-    source = { kind: "inline", image };
+    input = { mode: "photo", source: { kind: "inline", image } };
   } else {
     return NextResponse.json(
       { error: "Provide an `imageKey` (S3) or inline base64 `image`." },
@@ -275,15 +319,21 @@ export async function POST(req: Request) {
   }
 
   try {
-    const result = await callVisionModel(source, scenario);
+    const result = await callVisionModel(input, scenario);
     const saved = await saveScanToButterbase({ scenario, result });
 
-    // Hand the results page a presigned URL to render the S3 image.
-    if (source.kind === "s3" && isS3Configured()) {
-      imageUrl = await createDownloadUrl(source.key).catch(() => undefined);
+    if (input.mode === "photo" && input.source.kind === "s3" && isS3Configured()) {
+      imageUrl = await createDownloadUrl(input.source.key).catch(() => undefined);
     }
 
-    const response: AnalyzeResponse = { ...result, scenario, imageUrl, saved };
+    const response: AnalyzeResponse = {
+      ...result,
+      scenario,
+      scanMode,
+      imageUrl,
+      panoramaUrl,
+      saved,
+    };
     return NextResponse.json(response);
   } catch (err) {
     return NextResponse.json(
@@ -298,9 +348,6 @@ export async function POST(req: Request) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Mock analysis — deterministic per scenario for offline demos
-// ---------------------------------------------------------------------------
 function mockAnalysis(scenario: Scenario): AnalysisResult {
   const base: AnalysisResult = {
     egress_points: [
@@ -375,4 +422,53 @@ function mockAnalysis(scenario: Scenario): AnalysisResult {
   }
 
   return base;
+}
+
+function mockVideoAnalysis(scenario: Scenario): AnalysisResult {
+  const photo = mockAnalysis(scenario);
+  const room_model: RoomModel = {
+    walls: [
+      [[0.08, 0.08], [0.92, 0.08]],
+      [[0.92, 0.08], [0.92, 0.92]],
+      [[0.92, 0.92], [0.08, 0.92]],
+      [[0.08, 0.92], [0.08, 0.08]],
+      [[0.08, 0.35], [0.38, 0.35]],
+    ],
+    landmarks: [
+      { label: "Main exit", type: "exit", position: [0.5, 0.08], detail: "Clear" },
+      { label: "Desk", type: "furniture", position: [0.72, 0.55] },
+      { label: "Glass shelf", type: "hazard", position: [0.28, 0.42], detail: "Shatter risk" },
+      { label: "Window", type: "window", position: [0.88, 0.5] },
+      {
+        label: "Cover zone",
+        type: "safe_zone",
+        position: [0.72, 0.62],
+        detail: "High cover",
+      },
+    ],
+    scan_origin: [0.5, 0.78],
+    exit_path:
+      scenario === "CODE_RED"
+        ? [
+            [0.5, 0.78],
+            [0.62, 0.68],
+            [0.72, 0.62],
+          ]
+        : [
+            [0.5, 0.78],
+            [0.5, 0.55],
+            [0.5, 0.28],
+            [0.5, 0.12],
+          ],
+  };
+
+  if (scenario === "EARTHQUAKE") {
+    room_model.exit_path = [
+      [0.5, 0.78],
+      [0.58, 0.7],
+      [0.72, 0.62],
+    ];
+  }
+
+  return { ...photo, room_model };
 }
