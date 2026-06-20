@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -14,8 +14,9 @@ import {
   Video,
   X,
 } from "lucide-react";
-import type { ScanMode } from "@/lib/types";
-import { setupRoom } from "@/lib/roomLibrary";
+import type { SavedRoom, ScanMode } from "@/lib/types";
+import { listRooms, setupRoom } from "@/lib/roomLibrary";
+import { isDuplicateRoomLabel } from "@/lib/roomLabel";
 import { extractVideoPreview, extractVideoScan } from "@/lib/videoFrames";
 
 type CaptureTab = ScanMode;
@@ -39,6 +40,7 @@ export default function ScanPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [roomLabel, setRoomLabel] = useState("");
+  const [existingRooms, setExistingRooms] = useState<SavedRoom[]>([]);
   const [captureTab, setCaptureTab] = useState<CaptureTab>("video360");
   const [photos, setPhotos] = useState<PhotoItem[]>([]);
   const [videoPreview, setVideoPreview] = useState<string | null>(null);
@@ -47,8 +49,16 @@ export default function ScanPage() {
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
 
+  useEffect(() => {
+    void listRooms().then(setExistingRooms);
+  }, []);
+
   const isPhoto = captureTab === "photo";
   const hasCapture = isPhoto ? photos.length > 0 : Boolean(videoPreview);
+  const trimmedLabel = roomLabel.trim();
+  const labelTaken = trimmedLabel
+    ? isDuplicateRoomLabel(trimmedLabel, existingRooms)
+    : false;
 
   function clearCapture() {
     setPhotos([]);
@@ -197,7 +207,7 @@ export default function ScanPage() {
     : "border-slate-700 bg-slate-900/40 hover:border-emerald-500/60 hover:bg-slate-900/70";
 
   async function runSetup() {
-    if (!hasCapture || !roomLabel.trim()) return;
+    if (!hasCapture || !trimmedLabel || labelTaken) return;
     setLoading(true);
     setError(null);
 
@@ -275,8 +285,19 @@ export default function ScanPage() {
           value={roomLabel}
           onChange={(e) => setRoomLabel(e.target.value)}
           placeholder="e.g. Room 201, Main office, Cafeteria"
-          className="w-full rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-3 text-sm text-slate-100 placeholder:text-slate-600 focus:border-emerald-500/60 focus:outline-none focus:ring-1 focus:ring-emerald-500/40"
+          aria-invalid={labelTaken}
+          className={`w-full rounded-xl border bg-slate-900/60 px-4 py-3 text-sm text-slate-100 placeholder:text-slate-600 focus:outline-none focus:ring-1 ${
+            labelTaken
+              ? "border-red-500/50 focus:border-red-500/60 focus:ring-red-500/40"
+              : "border-slate-800 focus:border-emerald-500/60 focus:ring-emerald-500/40"
+          }`}
         />
+        {labelTaken ? (
+          <p className="mt-2 text-sm text-red-300">
+            A room named &ldquo;{trimmedLabel}&rdquo; already exists. Choose a
+            different name.
+          </p>
+        ) : null}
       </section>
 
       <section className="mb-6">
@@ -478,7 +499,7 @@ export default function ScanPage() {
       <div className="fixed inset-x-0 bottom-20 mx-auto w-full max-w-md border-t border-slate-800 bg-slate-950/90 px-5 py-4 backdrop-blur">
         <button
           onClick={runSetup}
-          disabled={!hasCapture || !roomLabel.trim() || loading}
+          disabled={!hasCapture || !trimmedLabel || labelTaken || loading}
           className="flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-500 py-4 text-base font-bold text-slate-950 shadow-neon transition active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400 disabled:shadow-none"
         >
           {loading ? (
@@ -493,7 +514,7 @@ export default function ScanPage() {
             </>
           )}
         </button>
-        {!hasCapture || !roomLabel.trim() ? (
+        {!hasCapture || !trimmedLabel || labelTaken ? (
           <p className="mt-2 flex items-center justify-center gap-1 text-center text-xs text-slate-500">
             <ImageUp className="h-3.5 w-3.5" />
             Add a room name and capture media to continue

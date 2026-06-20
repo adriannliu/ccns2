@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { butterbase, isButterbaseConfigured } from "@/lib/butterbase";
 import { buildAnalyzeInput, resolveDisplayImageUrl } from "@/lib/analyzeInput";
+import { isDuplicateRoomLabel } from "@/lib/roomLabel";
 import { ALL_SCENARIOS, runSpatialAnalysis } from "@/lib/spatialAnalysis";
 import type { SavedRoom, ScenarioPlans, SetupRoomRequest } from "@/lib/types";
 
@@ -20,6 +21,24 @@ export async function POST(req: Request) {
   const label = body.label?.trim();
   if (!label) {
     return NextResponse.json({ error: "Room label is required." }, { status: 400 });
+  }
+
+  if (isButterbaseConfigured()) {
+    const listRes = await butterbase.list<SavedRoom | Record<string, unknown>>(TABLE);
+    if (listRes.success && listRes.data) {
+      const existing = (Array.isArray(listRes.data) ? listRes.data : []).map((raw) => {
+        const r = raw as SavedRoom;
+        return { id: String(r.id ?? ""), label: String(r.label ?? "") };
+      });
+      if (isDuplicateRoomLabel(label, existing)) {
+        return NextResponse.json(
+          {
+            error: `A room named "${label}" already exists. Choose a different name.`,
+          },
+          { status: 409 },
+        );
+      }
+    }
   }
 
   let built;
