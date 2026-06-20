@@ -33,10 +33,13 @@ export default function ScanPage() {
   const [image, setImage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
 
-  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  async function loadImageFile(file: File) {
+    if (!file.type.startsWith("image/")) {
+      setError("Please use an image file (JPEG, PNG, etc.).");
+      return;
+    }
     setError(null);
     try {
       const dataUrl = await fileToDataUrl(file);
@@ -45,6 +48,42 @@ export default function ScanPage() {
       setError("Could not read that image. Try another photo.");
     }
   }
+
+  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    await loadImageFile(file);
+    e.target.value = "";
+  }
+
+  function handleDragOver(e: React.DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+  }
+
+  function handleDragEnter(e: React.DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(true);
+  }
+
+  function handleDragLeave(e: React.DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(false);
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) void loadImageFile(file);
+  }
+
+  const dropZoneActive = dragOver
+    ? "border-emerald-400 bg-emerald-500/10 ring-2 ring-emerald-500/30"
+    : "border-slate-700 bg-slate-900/40 hover:border-emerald-500/60 hover:bg-slate-900/70";
 
   async function runAnalysis() {
     if (!image) return;
@@ -156,24 +195,48 @@ export default function ScanPage() {
 
         {!image ? (
           <button
+            type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="flex w-full flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-slate-700 bg-slate-900/40 py-14 text-slate-300 transition hover:border-emerald-500/60 hover:bg-slate-900/70"
+            onDragOver={handleDragOver}
+            onDragEnter={handleDragEnter}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            className={`flex w-full flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed py-14 text-slate-300 transition ${dropZoneActive}`}
           >
             <Camera className="h-10 w-10 text-emerald-400" />
-            <span className="font-semibold">Open camera</span>
+            <span className="font-semibold">
+              {dragOver ? "Drop image here" : "Open camera"}
+            </span>
             <span className="text-xs text-slate-500">
-              or tap to choose a photo
+              tap to choose a photo, or drag and drop
             </span>
           </button>
         ) : (
           <div className="space-y-3">
-            <div className="relative overflow-hidden rounded-2xl border border-slate-800">
+            <div
+              onDragOver={handleDragOver}
+              onDragEnter={handleDragEnter}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+              className={`relative overflow-hidden rounded-2xl border-2 transition ${
+                dragOver
+                  ? "border-emerald-400 ring-2 ring-emerald-500/30"
+                  : "border-slate-800"
+              }`}
+            >
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={image}
                 alt="Room preview"
                 className="max-h-[55vh] w-full object-contain"
               />
+              {dragOver ? (
+                <div className="absolute inset-0 flex items-center justify-center bg-emerald-500/20 backdrop-blur-[1px]">
+                  <span className="rounded-xl bg-slate-950/80 px-4 py-2 text-sm font-semibold text-emerald-300">
+                    Drop to replace
+                  </span>
+                </div>
+              ) : null}
             </div>
             <button
               onClick={() => fileInputRef.current?.click()}
@@ -214,7 +277,7 @@ export default function ScanPage() {
         {!image ? (
           <p className="mt-2 flex items-center justify-center gap-1 text-center text-xs text-slate-500">
             <ImageUp className="h-3.5 w-3.5" />
-            Capture a photo to enable analysis
+            Capture, choose, or drag in a photo to enable analysis
           </p>
         ) : null}
       </div>
