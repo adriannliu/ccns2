@@ -1,9 +1,14 @@
 import { NextResponse } from "next/server";
 import { butterbase, isButterbaseConfigured } from "@/lib/butterbase";
-import { buildAnalyzeInput, resolveDisplayImageUrl } from "@/lib/analyzeInput";
+import {
+  buildAnalyzeInput,
+  resolveDisplayImageUrl,
+  resolveFrameImageUrls,
+} from "@/lib/analyzeInput";
 import { isDuplicateRoomLabel } from "@/lib/roomLabel";
 import { roomLabelCount } from "@/lib/roomLabels";
 import { ALL_SCENARIOS, runSpatialAnalysis } from "@/lib/spatialAnalysis";
+import { setupVideo360Room } from "@/lib/videoSetup";
 import type { SavedRoom, ScenarioPlans, SetupRoomRequest } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -52,22 +57,52 @@ export async function POST(req: Request) {
     );
   }
 
-  try {
-    const results = await Promise.all(
-      ALL_SCENARIOS.map(async (scenario) => {
-        const { result } = await runSpatialAnalysis(built.input, scenario);
-        return [scenario, result] as const;
-      }),
-    );
+  const scanMode = body.scanMode ?? built.input.mode;
+  const isVideo360 = scanMode === "video360";
 
-    const plans = Object.fromEntries(results) as ScenarioPlans;
+  try {
+    let plans: ScenarioPlans;
+    let framePlans: SavedRoom["framePlans"];
+    let frameImages: string[] | undefined;
+    let frameKeys: string[] | undefined;
+
+    if (isVideo360) {
+      const frameResolved = await resolveFrameImageUrls(body, built.input.sources);
+      frameImages = frameResolved.urls;
+      frameKeys = frameResolved.keys;
+
+      const analyzed = await setupVideo360Room(
+        built.input,
+        built.input.sources,
+      );
+      plans = analyzed.plans;
+      framePlans = analyzed.framePlans;
+    } else {
+      const results = await Promise.all(
+        ALL_SCENARIOS.map(async (scenario) => {
+          const { result } = await runSpatialAnalysis(built.input, scenario);
+          return [scenario, result] as const;
+        }),
+      );
+      plans = Object.fromEntries(results) as ScenarioPlans;
+    }
+
+    const displayUrl =
+      (await resolveDisplayImageUrl(built.input, built.imageUrl)) ??
+      body.previewImage ??
+      frameImages?.[0] ??
+      body.panorama ??
+      "";
 
     const labelProbe: SavedRoom = {
       id: "probe",
       label,
-      image: "",
-      scanMode: body.scanMode ?? built.input.mode,
+      image: displayUrl,
+      scanMode,
       plans,
+      frameImages,
+      frameKeys,
+      framePlans,
       createdAt: Date.now(),
     };
 
@@ -81,19 +116,16 @@ export async function POST(req: Request) {
       );
     }
 
-    const displayUrl =
-      (await resolveDisplayImageUrl(built.input, built.imageUrl)) ??
-      body.previewImage ??
-      body.panorama ??
-      "";
-
     const room: SavedRoom = {
       id: `room_${Date.now()}`,
       label,
       image: displayUrl,
       panorama: body.panorama,
-      scanMode: body.scanMode ?? built.input.mode,
+      scanMode,
       plans,
+      frameImages,
+      frameKeys,
+      framePlans,
       createdAt: Date.now(),
     };
 
@@ -107,6 +139,9 @@ export async function POST(req: Request) {
           scanMode: room.scanMode,
           createdAt: room.createdAt,
           plans_json: JSON.stringify(room.plans),
+          frame_images_json: frameImages ? JSON.stringify(frameImages) : undefined,
+          frame_keys_json: frameKeys ? JSON.stringify(frameKeys) : undefined,
+          frame_plans_json: framePlans ? JSON.stringify(framePlans) : undefined,
           created_at: new Date().toISOString(),
         },
         TABLE,

@@ -7,8 +7,8 @@ import { ArrowLeft, Loader2 } from "lucide-react";
 import ImageOverlay from "@/components/ImageOverlay";
 import RoomModelView from "@/components/RoomModelView";
 import { getRoomById, listRooms } from "@/lib/roomLibrary";
-import { buildRoomMapView } from "@/lib/roomMapView";
-import type { SavedRoom } from "@/lib/types";
+import { buildPlansMapView, buildRoomMapView } from "@/lib/roomMapView";
+import type { AnalysisResult, SavedRoom } from "@/lib/types";
 
 export default function RoomDetailPage() {
   const params = useParams();
@@ -38,6 +38,26 @@ export default function RoomDetailPage() {
       };
     }
   }, [room]);
+
+  const labeledFrames = useMemo(() => {
+    if (!room?.frameImages?.length || !room.framePlans?.length) return [];
+    return room.frameImages.map((imageSrc, index) => {
+      const plans = room.framePlans?.[index];
+      const result: AnalysisResult = plans
+        ? buildPlansMapView(plans)
+        : {
+            egress_points: [],
+            safe_zones: [],
+            hazards: [],
+            actionable_instructions: [],
+          };
+      const overlayCount =
+        result.egress_points.length + result.safe_zones.length;
+      return { imageSrc, result, overlayCount, index };
+    });
+  }, [room]);
+
+  const hasLabeledFrames = labeledFrames.some((frame) => frame.overlayCount > 0);
 
   const overlayCount = useMemo(() => {
     if (!mapView) return 0;
@@ -107,7 +127,53 @@ export default function RoomDetailPage() {
           </div>
         ) : null}
 
-        {room.image ? (
+        {labeledFrames.length > 0 ? (
+          <div className="space-y-4">
+            <div className="px-1">
+              <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">
+                Labeled frames
+              </p>
+              <p className="text-xs text-slate-400">
+                Each view from your scan — exits, windows, and shelter spots.
+              </p>
+            </div>
+            {labeledFrames.map(({ imageSrc, result, overlayCount, index }) => (
+              <div
+                key={`frame-${index}`}
+                className="rounded-2xl border border-slate-800 bg-slate-950/80"
+              >
+                <div className="border-b border-slate-800 px-4 py-2">
+                  <p className="text-xs font-semibold text-slate-400">
+                    Frame {index + 1} of {labeledFrames.length}
+                  </p>
+                </div>
+                <div className="overflow-visible p-3">
+                  {overlayCount > 0 ? (
+                    <ImageOverlay
+                      imageSrc={imageSrc}
+                      result={result}
+                      variant="library"
+                      maxHeightClass="max-h-[45vh]"
+                    />
+                  ) : (
+                    <div className="space-y-3">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={imageSrc}
+                        alt={`Frame ${index + 1}`}
+                        className="max-h-[45vh] w-full rounded-xl object-contain"
+                      />
+                      <p className="rounded-xl border border-slate-800 bg-slate-900/50 px-4 py-3 text-sm text-slate-400">
+                        No labels for this angle — check other frames or the
+                        floor plan above.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : room.image ? (
           <div className="rounded-2xl border border-slate-800 bg-slate-950/80">
             <div className="border-b border-slate-800 px-4 py-2">
               <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">
@@ -138,6 +204,11 @@ export default function RoomDetailPage() {
               )}
             </div>
           </div>
+        ) : !hasLabeledFrames && !mapView.room_model ? (
+          <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+            No labels were saved for this room. Delete it and scan again from
+            the Set Up tab to rebuild the map.
+          </p>
         ) : null}
       </section>
     </main>

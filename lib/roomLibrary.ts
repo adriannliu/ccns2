@@ -2,7 +2,9 @@ import type { SavedRoom } from "./types";
 import { roomLabelCount } from "./roomLabels";
 import {
   deleteRoomPlans,
+  loadFramePlans,
   loadRoomPlans,
+  persistFramePlans,
   persistRoomPlans,
 } from "./roomPlansStorage";
 import { mergeSavedRooms, normalizeSavedRoom } from "./savedRoom";
@@ -12,9 +14,16 @@ const KEY = "safespace:saved-rooms";
 /** Attach separately persisted plans when the room list entry is missing them. */
 function attachStoredPlans(room: SavedRoom): SavedRoom {
   const stored = loadRoomPlans(room.id);
-  const merged = stored ? mergeSavedRooms({ ...room, plans: stored }, room) : room;
+  const storedFrames = loadFramePlans(room.id);
+  let merged = stored ? mergeSavedRooms({ ...room, plans: stored }, room) : room;
+  if (storedFrames?.length) {
+    merged = { ...merged, framePlans: storedFrames };
+  }
   if (roomLabelCount(merged) > 0) {
     persistRoomPlans(merged.id, merged.plans);
+    if (merged.framePlans?.length) {
+      persistFramePlans(merged.id, merged.framePlans);
+    }
   }
   return merged;
 }
@@ -37,7 +46,9 @@ function writeLocal(rooms: SavedRoom[]): void {
   if (typeof window === "undefined") return;
   try {
     // Keep image URLs only in the index — plans live in roomPlansStorage.
-    const slim = rooms.map(({ plans: _plans, ...meta }) => meta);
+    const slim = rooms.map(
+      ({ plans: _plans, framePlans: _framePlans, ...meta }) => meta,
+    );
     localStorage.setItem(KEY, JSON.stringify(slim));
   } catch {
     // Quota exceeded — keep in-memory only for this session.
@@ -77,7 +88,10 @@ export async function listRooms(): Promise<SavedRoom[]> {
       .map(attachStoredPlans)
       .sort((a, b) => b.createdAt - a.createdAt);
     for (const room of list) {
-      if (roomLabelCount(room) > 0) persistRoomPlans(room.id, room.plans);
+      if (roomLabelCount(room) > 0) {
+        persistRoomPlans(room.id, room.plans);
+        if (room.framePlans?.length) persistFramePlans(room.id, room.framePlans);
+      }
     }
     memoryRooms = list;
     writeLocal(list);
@@ -95,6 +109,9 @@ export function upsertRoomLocal(room: SavedRoom): void {
   const normalized = attachStoredPlans(normalizeSavedRoom(room));
   if (roomLabelCount(normalized) > 0) {
     persistRoomPlans(normalized.id, normalized.plans);
+    if (normalized.framePlans?.length) {
+      persistFramePlans(normalized.id, normalized.framePlans);
+    }
   }
   const rooms = allLocal().filter((r) => r.id !== normalized.id);
   rooms.unshift(normalized);

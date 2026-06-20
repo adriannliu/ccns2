@@ -88,3 +88,31 @@ export async function resolveDisplayImageUrl(
   }
   return undefined;
 }
+
+/** Resolve display URLs for each sampled video frame. */
+export async function resolveFrameImageUrls(
+  body: CapturePayload,
+  sources: ImageSource[],
+): Promise<{ urls: string[]; keys?: string[] }> {
+  if (body.frameKeys?.length && isS3Configured()) {
+    const urls = await Promise.all(
+      body.frameKeys.map((key) => createDownloadUrl(key)),
+    );
+    return { urls, keys: body.frameKeys };
+  }
+  if (body.frames?.length) {
+    return { urls: body.frames };
+  }
+
+  const urls: string[] = [];
+  const keys: string[] = [];
+  for (const src of sources) {
+    if (src.kind === "inline") {
+      urls.push(src.image);
+    } else if (src.kind === "s3" && isS3Configured()) {
+      urls.push(await createDownloadUrl(src.key));
+      keys.push(src.key);
+    }
+  }
+  return keys.length > 0 ? { urls, keys } : { urls };
+}

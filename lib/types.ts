@@ -78,6 +78,9 @@ export type ScanMode = "photo" | "video360";
 /** Pre-computed emergency plans keyed by scenario. */
 export type ScenarioPlans = Record<Scenario, AnalysisResult>;
 
+/** Per-frame photo labels from a 360° video scan (aligned with frameImages). */
+export type FramePlans = ScenarioPlans[];
+
 /** A labeled room saved during setup for emergency lookup. */
 export interface SavedRoom {
   id: string;
@@ -86,6 +89,12 @@ export interface SavedRoom {
   panorama?: string;
   scanMode: ScanMode;
   plans: ScenarioPlans;
+  /** Display URLs for each sampled video frame. */
+  frameImages?: string[];
+  /** S3 keys for frameImages (refreshed to presigned URLs on list). */
+  frameKeys?: string[];
+  /** Photo-style labels for each frame (all scenarios). */
+  framePlans?: FramePlans;
   createdAt: number;
 }
 

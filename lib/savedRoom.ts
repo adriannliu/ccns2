@@ -2,9 +2,11 @@ import { normalizeBBox } from "./bbox";
 import type {
   AnalysisResult,
   EgressPoint,
+  FramePlans,
   SafeZone,
   SavedRoom,
   Scenario,
+  ScenarioPlans,
 } from "./types";
 
 const SCENARIOS: Scenario[] = ["FIRE", "EARTHQUAKE", "CODE_RED"];
@@ -81,6 +83,58 @@ function parsePlansRaw(raw: Partial<SavedRoom> | Record<string, unknown>): unkno
   return record.plans;
 }
 
+function normalizeScenarioPlans(raw: unknown): ScenarioPlans | null {
+  if (!raw || typeof raw !== "object") return null;
+  const plans: ScenarioPlans = {
+    FIRE: { ...EMPTY_PLAN },
+    EARTHQUAKE: { ...EMPTY_PLAN },
+    CODE_RED: { ...EMPTY_PLAN },
+  };
+  for (const scenario of SCENARIOS) {
+    const plan = (raw as Record<string, unknown>)[scenario];
+    if (plan) plans[scenario] = normalizePlan(plan);
+  }
+  return plans;
+}
+
+function parseFramePlansRaw(raw: Record<string, unknown>): unknown {
+  if (Array.isArray(raw.framePlans)) return raw.framePlans;
+  if (typeof raw.frame_plans_json === "string") {
+    try {
+      return JSON.parse(raw.frame_plans_json);
+    } catch {
+      return null;
+    }
+  }
+  if (typeof raw.frame_plans_json === "object") return raw.frame_plans_json;
+  return null;
+}
+
+function normalizeFramePlans(raw: unknown): FramePlans | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  const framePlans = raw
+    .map((entry) => normalizeScenarioPlans(entry))
+    .filter((plans): plans is ScenarioPlans => plans !== null);
+  return framePlans.length > 0 ? framePlans : undefined;
+}
+
+function parseStringArray(raw: unknown): string[] | undefined {
+  if (Array.isArray(raw) && raw.every((item) => typeof item === "string")) {
+    return raw as string[];
+  }
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.every((item) => typeof item === "string")) {
+        return parsed as string[];
+      }
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
 function planScore(plan: AnalysisResult): number {
   return (
     plan.egress_points.length +
@@ -109,6 +163,13 @@ export function mergeSavedRooms(a: SavedRoom, b: SavedRoom): SavedRoom {
     label: primary.label || secondary.label,
     image: primary.image || secondary.image,
     panorama: primary.panorama || secondary.panorama,
+    frameImages: primary.frameImages?.length
+      ? primary.frameImages
+      : secondary.frameImages,
+    frameKeys: primary.frameKeys?.length ? primary.frameKeys : secondary.frameKeys,
+    framePlans: primary.framePlans?.length
+      ? primary.framePlans
+      : secondary.framePlans,
     plans: {
       FIRE: mergePlan(primary.plans.FIRE, secondary.plans.FIRE),
       EARTHQUAKE: mergePlan(primary.plans.EARTHQUAKE, secondary.plans.EARTHQUAKE),
@@ -135,6 +196,15 @@ export function normalizeSavedRoom(
     }
   }
 
+  const record = raw as Record<string, unknown>;
+  const framePlans = normalizeFramePlans(parseFramePlansRaw(record));
+  const frameImages =
+    parseStringArray(record.frameImages) ??
+    parseStringArray(record.frame_images_json);
+  const frameKeys =
+    parseStringArray(record.frameKeys) ??
+    parseStringArray(record.frame_keys_json);
+
   return {
     id: String(raw.id ?? ""),
     label: String(raw.label ?? "Unnamed room"),
@@ -142,6 +212,9 @@ export function normalizeSavedRoom(
     panorama: raw.panorama ? String(raw.panorama) : undefined,
     scanMode: raw.scanMode === "photo" ? "photo" : "video360",
     plans,
+    frameImages,
+    frameKeys,
+    framePlans,
     createdAt: Number(raw.createdAt ?? Date.now()),
   };
 }

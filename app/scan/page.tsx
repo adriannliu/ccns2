@@ -17,10 +17,7 @@ import {
 import type { SavedRoom, ScanMode } from "@/lib/types";
 import { listRooms, setupRoom } from "@/lib/roomLibrary";
 import { isDuplicateRoomLabel } from "@/lib/roomLabel";
-import {
-  extractVideoScan,
-  reorderFramesPrimary,
-} from "@/lib/videoFrames";
+import { extractVideoScan } from "@/lib/videoFrames";
 
 type CaptureTab = ScanMode;
 
@@ -48,7 +45,6 @@ export default function ScanPage() {
   const [photos, setPhotos] = useState<PhotoItem[]>([]);
   const [videoFrames, setVideoFrames] = useState<string[]>([]);
   const [videoPanorama, setVideoPanorama] = useState<string | null>(null);
-  const [selectedFrameIndex, setSelectedFrameIndex] = useState(0);
   const [videoExtracting, setVideoExtracting] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -69,7 +65,6 @@ export default function ScanPage() {
     setPhotos([]);
     setVideoFrames([]);
     setVideoPanorama(null);
-    setSelectedFrameIndex(0);
     setVideoExtracting(false);
     setError(null);
   }
@@ -109,7 +104,6 @@ export default function ScanPage() {
     setVideoExtracting(true);
     setVideoFrames([]);
     setVideoPanorama(null);
-    setSelectedFrameIndex(0);
     try {
       const scan = await extractVideoScan(next);
       setVideoFrames(scan.frames);
@@ -247,17 +241,13 @@ export default function ScanPage() {
           });
         }
       } else {
-        const orderedFrames = reorderFramesPrimary(
-          videoFrames,
-          selectedFrameIndex,
-        );
-        const frameKeys = await uploadDataUrlsToS3(orderedFrames);
+        const frameKeys = await uploadDataUrlsToS3(videoFrames);
         await setupRoom({
           label: roomLabel.trim(),
           scanMode: "video360",
-          previewImage: orderedFrames[0],
+          previewImage: videoFrames[0],
           panorama: videoPanorama ?? undefined,
-          ...(frameKeys ? { frameKeys } : { frames: orderedFrames }),
+          ...(frameKeys ? { frameKeys } : { frames: videoFrames }),
         });
       }
       router.push("/rooms");
@@ -488,8 +478,8 @@ export default function ScanPage() {
             >
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src={videoFrames[selectedFrameIndex]}
-                alt={`Room frame ${selectedFrameIndex + 1}`}
+                src={videoFrames[0]}
+                alt="Room preview"
                 className="max-h-[55vh] w-full object-contain"
               />
               {dragOver ? (
@@ -501,40 +491,10 @@ export default function ScanPage() {
               ) : null}
             </div>
 
-            {videoFrames.length > 1 ? (
-              <div>
-                <p className="mb-2 text-xs text-slate-500">
-                  Tap a frame to label — exits and shelter spots will be drawn on
-                  the selected view, like a single photo.
-                </p>
-                <div className="grid grid-cols-5 gap-1.5">
-                  {videoFrames.map((frame, i) => (
-                    <button
-                      key={i}
-                      type="button"
-                      onClick={() => setSelectedFrameIndex(i)}
-                      aria-label={`Use frame ${i + 1} for labels`}
-                      aria-pressed={selectedFrameIndex === i}
-                      className={`relative aspect-[4/3] overflow-hidden rounded-lg border-2 transition ${
-                        selectedFrameIndex === i
-                          ? "border-emerald-400 ring-2 ring-emerald-500/40"
-                          : "border-slate-800 opacity-80 hover:opacity-100"
-                      }`}
-                    >
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={frame}
-                        alt=""
-                        className="h-full w-full object-cover"
-                      />
-                      <span className="absolute bottom-0.5 right-0.5 rounded bg-slate-950/80 px-1 text-[10px] font-semibold text-slate-300">
-                        {i + 1}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : null}
+            <p className="text-center text-xs text-slate-500">
+              {videoFrames.length} frames will each get exit and shelter labels,
+              plus a top-down floor plan.
+            </p>
 
             <button
               onClick={() => openFilePicker(true)}
@@ -568,7 +528,9 @@ export default function ScanPage() {
           {loading ? (
             <>
               <Loader2 className="h-5 w-5 animate-spin" />
-              Mapping room (all scenarios)…
+              {isPhoto
+                ? "Mapping room (all scenarios)…"
+                : "Building floor plan & labeling frames…"}
             </>
           ) : (
             <>

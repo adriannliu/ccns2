@@ -9,8 +9,15 @@ export function planLabelCount(plan: AnalysisResult): number {
 }
 
 export function roomLabelCount(room: SavedRoom): number {
-  return Object.values(room.plans).reduce(
-    (total, plan) => total + planLabelCount(plan),
+  let total = Object.values(room.plans).reduce(
+    (sum, plan) => sum + planLabelCount(plan),
     0,
   );
+  for (const framePlan of room.framePlans ?? []) {
+    total += Object.values(framePlan).reduce(
+      (sum, plan) => sum + planLabelCount(plan),
+      0,
+    );
+  }
+  return total;
 }

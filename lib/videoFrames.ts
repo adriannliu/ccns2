@@ -72,44 +72,6 @@ function captureFrame(
   return canvas.toDataURL("image/jpeg", JPEG_QUALITY);
 }
 
-/** Put the user-selected frame first so video360 bbox overlays match the display image. */
-export function reorderFramesPrimary(
-  frames: string[],
-  primaryIndex: number,
-): string[] {
-  if (
-    primaryIndex <= 0 ||
-    primaryIndex >= frames.length ||
-    frames.length < 2
-  ) {
-    return frames;
-  }
-  return [
-    frames[primaryIndex],
-    ...frames.slice(0, primaryIndex),
-    ...frames.slice(primaryIndex + 1),
-  ];
-}
-
-/** Grab a single preview frame for the scan-page thumbnail (matches old photo UI). */
-export async function extractVideoPreview(file: File): Promise<string> {
-  if (!file.type.startsWith("video/")) {
-    throw new Error("Please use a video file (MOV or MP4 from your iPhone).");
-  }
-
-  const { video, url, duration } = await loadVideoMetadata(file);
-
-  try {
-    const t = Math.max(duration * 0.15, 0);
-    await seekVideo(video, t);
-    return captureFrame(video, FRAME_MAX_WIDTH);
-  } finally {
-    URL.revokeObjectURL(url);
-    video.removeAttribute("src");
-    video.load();
-  }
-}
-
 export async function stitchPanoramaAsync(frames: string[]): Promise<string> {
   if (frames.length === 0) return "";
   if (frames.length === 1) return frames[0];
