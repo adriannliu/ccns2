@@ -2,8 +2,11 @@
 
 import { useMemo, useState } from "react";
 import type {
+  AccessibilityStatus,
   AnalysisResult,
   BBox,
+  EgressPoint,
+  EgressType,
   OverlayRegion,
   RegionKind,
 } from "@/lib/types";
@@ -46,10 +49,62 @@ const KIND_STYLES: Record<
   },
 };
 
+/** Assumed camera/user position when holding the phone facing into the room. */
+const USER_POSITION = { x: 0.5, y: 0.92 } as const;
+
+const ACCESSIBILITY_RANK: Record<AccessibilityStatus, number> = {
+  Clear: 0,
+  "Partially Blocked": 1,
+  Blocked: 2,
+};
+
+const EGRESS_TYPE_RANK: Record<EgressType, number> = {
+  "Primary Door": 0,
+  "Secondary Door": 1,
+  Window: 2,
+};
+
 /** Clamp a number into the [0, 1] range. */
 function clamp01(n: number): number {
   if (Number.isNaN(n)) return 0;
   return Math.min(1, Math.max(0, n));
+}
+
+function bboxCenter([ymin, xmin, ymax, xmax]: BBox): { x: number; y: number } {
+  return {
+    x: (clamp01(xmin) + clamp01(xmax)) / 2,
+    y: (clamp01(ymin) + clamp01(ymax)) / 2,
+  };
+}
+
+function dist(
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+): number {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+/** Pick the best egress: prefer clear primary doors, then nearest by distance. */
+function pickRecommendedEgress(egress: EgressPoint[]): EgressPoint | null {
+  if (egress.length === 0) return null;
+
+  const reachable = egress.filter((e) => e.accessibility_status !== "Blocked");
+  const candidates = reachable.length > 0 ? reachable : egress;
+
+  return [...candidates].sort((a, b) => {
+    const byAccess =
+      ACCESSIBILITY_RANK[a.accessibility_status] -
+      ACCESSIBILITY_RANK[b.accessibility_status];
+    if (byAccess !== 0) return byAccess;
+
+    const byType = EGRESS_TYPE_RANK[a.type] - EGRESS_TYPE_RANK[b.type];
+    if (byType !== 0) return byType;
+
+    return (
+      dist(USER_POSITION, bboxCenter(a.coordinates)) -
+      dist(USER_POSITION, bboxCenter(b.coordinates))
+    );
+  })[0];
 }
 
 /**
@@ -104,6 +159,15 @@ export default function ImageOverlay({
   className = "",
 }: ImageOverlayProps) {
   const regions = useMemo(() => flatten(result), [result]);
+  const recommendedExit = useMemo(
+    () => pickRecommendedEgress(result.egress_points ?? []),
+    [result.egress_points],
+  );
+  const exitTarget = useMemo(
+    () =>
+      recommendedExit ? bboxCenter(recommendedExit.coordinates) : null,
+    [recommendedExit],
+  );
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
 
   return (
@@ -121,6 +185,58 @@ export default function ImageOverlay({
           alt="Scanned room"
           className={`block h-auto w-auto max-w-full rounded-xl ${maxHeightClass} object-contain`}
         />
+
+        {/* Recommended path to nearest viable exit */}
+        {exitTarget ? (
+          <svg
+            className="pointer-events-none absolute inset-0 z-[5] h-full w-full overflow-visible"
+            viewBox="0 0 1 1"
+            preserveAspectRatio="none"
+            aria-hidden
+          >
+            <defs>
+              <marker
+                id="exit-path-arrow"
+                markerWidth="0.05"
+                markerHeight="0.05"
+                refX="0.04"
+                refY="0.025"
+                orient="auto"
+              >
+                <path
+                  d="M0,0 L0.05,0.025 L0,0.05 Z"
+                  fill="rgb(96 165 250)"
+                />
+              </marker>
+            </defs>
+            <line
+              x1={USER_POSITION.x}
+              y1={USER_POSITION.y}
+              x2={exitTarget.x}
+              y2={exitTarget.y}
+              stroke="rgb(96 165 250)"
+              strokeWidth={0.008}
+              strokeDasharray="0.028 0.02"
+              strokeLinecap="round"
+              markerEnd="url(#exit-path-arrow)"
+              opacity={0.95}
+            />
+            <circle
+              cx={USER_POSITION.x}
+              cy={USER_POSITION.y}
+              r={0.016}
+              fill="rgb(15 23 42)"
+              stroke="rgb(96 165 250)"
+              strokeWidth={0.005}
+            />
+            <circle
+              cx={USER_POSITION.x}
+              cy={USER_POSITION.y}
+              r={0.006}
+              fill="rgb(96 165 250)"
+            />
+          </svg>
+        ) : null}
 
         {/* Bounding boxes */}
         {regions.map((region, i) => {
