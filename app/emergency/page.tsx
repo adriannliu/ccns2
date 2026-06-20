@@ -9,8 +9,10 @@ import {
   Loader2,
   MapPin,
 } from "lucide-react";
+import EmergencyCallButton from "@/components/EmergencyCallButton";
 import ImageOverlay from "@/components/ImageOverlay";
 import RoomModelView from "@/components/RoomModelView";
+import { GENERAL_EMERGENCY_STEPS } from "@/lib/generalEmergencyGuidance";
 import { listRooms } from "@/lib/roomLibrary";
 import { SCENARIOS, getScenario } from "@/lib/scenarios";
 import type { AnalysisResult, SavedRoom, Scenario } from "@/lib/types";
@@ -31,12 +33,6 @@ export default function EmergencyPage() {
   const plan: AnalysisResult | null =
     room && scenario ? room.plans[scenario] : null;
   const cfg = scenario ? getScenario(scenario) : null;
-
-  function reset() {
-    setStep("room");
-    setRoom(null);
-    setScenario(null);
-  }
 
   if (step === "plan" && room && scenario && plan && cfg) {
     const Icon = cfg.icon;
@@ -64,6 +60,8 @@ export default function EmergencyPage() {
             </p>
           </div>
         </header>
+
+        <EmergencyCallButton className="mb-4" />
 
         <section className="mb-4 space-y-4">
           {plan.room_model ? (
@@ -117,14 +115,6 @@ export default function EmergencyPage() {
             ))}
           </ol>
         </section>
-
-        <button
-          type="button"
-          onClick={reset}
-          className="mb-6 w-full rounded-2xl border border-slate-800 bg-slate-900/60 py-4 font-semibold text-slate-300"
-        >
-          Start over
-        </button>
       </main>
     );
   }
@@ -147,6 +137,8 @@ export default function EmergencyPage() {
             <p className="text-sm text-slate-400">You are in: {room.label}</p>
           </div>
         </header>
+
+        <EmergencyCallButton className="mb-6" />
 
         <div className="grid gap-3">
           {SCENARIOS.map((s) => {
@@ -185,22 +177,49 @@ export default function EmergencyPage() {
         </p>
       </header>
 
+      <EmergencyCallButton className="mb-6" />
+
       {loading ? (
         <div className="flex flex-1 items-center justify-center py-20">
           <Loader2 className="h-8 w-8 animate-spin text-red-400" />
         </div>
       ) : rooms.length === 0 ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-4 py-16 text-center">
-          <MapPin className="h-10 w-10 text-slate-600" />
-          <p className="text-sm text-slate-400">
-            No saved rooms yet. Set up your building first.
-          </p>
-          <Link
-            href="/scan"
-            className="rounded-xl bg-emerald-500 px-5 py-3 font-bold text-slate-950"
-          >
-            Set up rooms
-          </Link>
+        <div className="flex flex-1 flex-col gap-6 pb-6">
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4 text-center">
+            <MapPin className="mx-auto mb-2 h-8 w-8 text-slate-600" />
+            <p className="text-sm text-slate-400">
+              No saved rooms yet — set up labeled scans for room-specific exit
+              routes and shelter spots.
+            </p>
+            <Link
+              href="/scan"
+              className="mt-4 inline-flex rounded-xl bg-emerald-500 px-5 py-3 text-sm font-bold text-slate-950"
+            >
+              Set up rooms
+            </Link>
+          </div>
+
+          <section>
+            <h2 className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-slate-500">
+              <ListChecks className="h-4 w-4" />
+              What to do now
+            </h2>
+            <ol className="space-y-2">
+              {GENERAL_EMERGENCY_STEPS.map((stepText, i) => (
+                <li
+                  key={i}
+                  className="flex gap-3 rounded-2xl border border-slate-800 bg-slate-900/50 p-4"
+                >
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-red-500 text-sm font-bold text-white">
+                    {i + 1}
+                  </span>
+                  <p className="text-sm leading-relaxed text-slate-200">
+                    {stepText}
+                  </p>
+                </li>
+              ))}
+            </ol>
+          </section>
         </div>
       ) : (
         <ul className="space-y-2 pb-6">
