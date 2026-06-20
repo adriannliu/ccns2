@@ -9,11 +9,14 @@ import type {
   EgressType,
   OverlayRegion,
   RegionKind,
+  Scenario,
 } from "@/lib/types";
 
 interface ImageOverlayProps {
   imageSrc: string;
   result: AnalysisResult;
+  /** When set, hides the exit path during earthquake (cover zones only). */
+  scenario?: Scenario;
   /** Max height (in viewport-aware CSS) the image is allowed to occupy. */
   maxHeightClass?: string;
   className?: string;
@@ -176,13 +179,15 @@ function flatten(result: AnalysisResult): OverlayRegion[] {
 export default function ImageOverlay({
   imageSrc,
   result,
+  scenario,
   maxHeightClass = "max-h-[70vh]",
   className = "",
 }: ImageOverlayProps) {
+  const showExitPath = !scenario || scenario !== "EARTHQUAKE";
   const regions = useMemo(() => flatten(result), [result]);
   const recommendedExit = useMemo(
-    () => pickRecommendedEgress(result.egress_points ?? []),
-    [result.egress_points],
+    () => (showExitPath ? pickRecommendedEgress(result.egress_points ?? []) : null),
+    [result.egress_points, showExitPath],
   );
   const exitTarget = useMemo(
     () =>

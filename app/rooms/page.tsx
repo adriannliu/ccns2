@@ -54,33 +54,41 @@ export default function RoomsPage() {
               className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/50"
             >
               <div className="flex gap-3 p-3">
-                {room.image ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={room.image}
-                    alt=""
-                    className="h-16 w-16 shrink-0 rounded-xl object-cover"
-                  />
-                ) : (
-                  <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl bg-slate-800">
-                    <DoorOpen className="h-6 w-6 text-slate-500" />
+                <Link
+                  href={`/rooms/${room.id}`}
+                  className="flex min-w-0 flex-1 gap-3 transition hover:opacity-90"
+                >
+                  {room.image ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={room.image}
+                      alt=""
+                      className="h-16 w-16 shrink-0 rounded-xl object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl bg-slate-800">
+                      <DoorOpen className="h-6 w-6 text-slate-500" />
+                    </div>
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-semibold text-slate-100">
+                      {room.label}
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      {room.scanMode === "video360" ? "360° video" : "Photo"} ·{" "}
+                      {new Date(room.createdAt).toLocaleDateString()}
+                    </p>
+                    <p className="mt-1 text-xs text-emerald-400/80">
+                      Tap to view exits, cover zones & hazards
+                    </p>
                   </div>
-                )}
-                <div className="min-w-0 flex-1">
-                  <p className="truncate font-semibold text-slate-100">
-                    {room.label}
-                  </p>
-                  <p className="text-xs text-slate-500">
-                    {room.scanMode === "video360" ? "360° video" : "Photo"} ·{" "}
-                    {new Date(room.createdAt).toLocaleDateString()}
-                  </p>
-                  <p className="mt-1 text-xs text-emerald-400/80">
-                    Fire · Earthquake · Lockdown plans ready
-                  </p>
-                </div>
+                </Link>
                 <button
                   type="button"
-                  onClick={() => void handleDelete(room.id)}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    void handleDelete(room.id);
+                  }}
                   className="shrink-0 self-start rounded-lg p-2 text-slate-500 transition hover:bg-red-500/10 hover:text-red-400"
                   aria-label={`Delete ${room.label}`}
                 >

@@ -85,6 +85,7 @@ export default function EmergencyPage() {
           <ImageOverlay
             imageSrc={room.image}
             result={plan}
+            scenario={scenario}
             maxHeightClass="max-h-[45vh]"
           />
         </section>
