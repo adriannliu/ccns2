@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -15,7 +15,7 @@ import {
   X,
 } from "lucide-react";
 import type { SavedRoom, ScanMode } from "@/lib/types";
-import { listRooms, setupRoom } from "@/lib/roomLibrary";
+import { getRoomById, listRooms, rescanRoom, setupRoom } from "@/lib/roomLibrary";
 import { isDuplicateRoomLabel } from "@/lib/roomLabel";
 import { extractVideoScan } from "@/lib/videoFrames";
 
@@ -36,7 +36,23 @@ function fileToDataUrl(file: File): Promise<string> {
 }
 
 export default function ScanPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="bg-grid mx-auto flex min-h-screen w-full max-w-md items-center justify-center">
+          <Loader2 className="h-8 w-8 animate-spin text-emerald-400" />
+        </main>
+      }
+    >
+      <ScanPageContent />
+    </Suspense>
+  );
+}
+
+function ScanPageContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const rescanId = searchParams.get("rescan")?.trim() || null;
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [roomLabel, setRoomLabel] = useState("");
@@ -49,16 +65,29 @@ export default function ScanPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [rescanRoomMissing, setRescanRoomMissing] = useState(false);
 
   useEffect(() => {
     void listRooms().then(setExistingRooms);
   }, []);
 
+  useEffect(() => {
+    if (!rescanId) return;
+    const existing = getRoomById(rescanId);
+    if (!existing) {
+      setRescanRoomMissing(true);
+      return;
+    }
+    setRescanRoomMissing(false);
+    setRoomLabel(existing.label);
+    setCaptureTab(existing.scanMode);
+  }, [rescanId]);
+
   const isPhoto = captureTab === "photo";
   const hasCapture = isPhoto ? photos.length > 0 : videoFrames.length > 0;
   const trimmedLabel = roomLabel.trim();
   const labelTaken = trimmedLabel
-    ? isDuplicateRoomLabel(trimmedLabel, existingRooms)
+    ? isDuplicateRoomLabel(trimmedLabel, existingRooms, rescanId ?? undefined)
     : false;
 
   function clearCapture() {
@@ -219,11 +248,15 @@ export default function ScanPage() {
     setError(null);
 
     try {
+      const save = rescanId
+        ? (payload: Record<string, unknown>) => rescanRoom(rescanId, payload)
+        : setupRoom;
+
       if (isPhoto) {
         const previews = photos.map((p) => p.preview);
         if (photos.length === 1) {
           const uploaded = await uploadToS3(photos[0].file);
-          await setupRoom({
+          await save({
             label: roomLabel.trim(),
             scanMode: "photo",
             previewImage: previews[0],
@@ -233,7 +266,7 @@ export default function ScanPage() {
           });
         } else {
           const frameKeys = await uploadDataUrlsToS3(previews);
-          await setupRoom({
+          await save({
             label: roomLabel.trim(),
             scanMode: "photo",
             previewImage: previews[0],
@@ -242,7 +275,7 @@ export default function ScanPage() {
         }
       } else {
         const frameKeys = await uploadDataUrlsToS3(videoFrames);
-        await setupRoom({
+        await save({
           label: roomLabel.trim(),
           scanMode: "video360",
           previewImage: videoFrames[0],
@@ -250,7 +283,7 @@ export default function ScanPage() {
           ...(frameKeys ? { frameKeys } : { frames: videoFrames }),
         });
       }
-      router.push("/rooms");
+      router.push(rescanId ? `/rooms/${rescanId}` : "/rooms");
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Something went wrong. Try again.",
@@ -268,19 +301,38 @@ export default function ScanPage() {
     <main className="bg-grid mx-auto flex min-h-screen w-full max-w-md flex-col px-5 pb-36 pt-6">
       <header className="mb-6 flex items-center gap-3">
         <Link
-          href="/"
+          href={rescanId ? `/rooms/${rescanId}` : "/"}
           className="rounded-full border border-slate-800 bg-slate-900/60 p-2 text-slate-300 transition hover:text-white"
-          aria-label="Back to home"
+          aria-label="Back"
         >
           <ArrowLeft className="h-5 w-5" />
         </Link>
         <div>
-          <h1 className="text-xl font-bold tracking-tight">Set up a room</h1>
+          <h1 className="text-xl font-bold tracking-tight">
+            {rescanId ? "Re-scan room" : "Set up a room"}
+          </h1>
           <p className="text-sm text-slate-400">
-            Label and scan — we&apos;ll map exits for every emergency.
+            {rescanId
+              ? "Capture new media to replace this room’s plans."
+              : "Label and scan — we'll map exits for every emergency."}
           </p>
         </div>
       </header>
+
+      {rescanId && !rescanRoomMissing ? (
+        <p className="mb-4 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
+          Updating an existing room — your plans will be replaced when you save.
+        </p>
+      ) : null}
+
+      {rescanRoomMissing ? (
+        <p className="mb-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+          That room was not found.{" "}
+          <Link href="/rooms" className="underline">
+            Back to saved rooms
+          </Link>
+        </p>
+      ) : null}
 
       <section className="mb-6">
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-widest text-slate-500">
@@ -517,6 +569,7 @@ export default function ScanPage() {
         <button
           onClick={runSetup}
           disabled={
+            rescanRoomMissing ||
             !hasCapture ||
             !trimmedLabel ||
             labelTaken ||
@@ -535,7 +588,7 @@ export default function ScanPage() {
           ) : (
             <>
               <ScanLine className="h-5 w-5" />
-              Save room &amp; build plans
+              {rescanId ? "Update room & rebuild plans" : "Save room & build plans"}
             </>
           )}
         </button>

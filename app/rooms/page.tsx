@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { DoorOpen, Loader2, MapPin, Plus, Trash2 } from "lucide-react";
-import { deleteRoom, listRooms } from "@/lib/roomLibrary";
+import { DoorOpen, Loader2, MapPin, Plus } from "lucide-react";
+import RoomManageActions from "@/components/RoomManageActions";
+import { listRooms } from "@/lib/roomLibrary";
 import type { SavedRoom } from "@/lib/types";
 
 export default function RoomsPage() {
@@ -14,9 +15,14 @@ export default function RoomsPage() {
     void listRooms().then(setRooms).finally(() => setLoading(false));
   }, []);
 
-  async function handleDelete(id: string) {
-    await deleteRoom(id);
-    setRooms((prev) => prev.filter((r) => r.id !== id));
+  function handleUpdated(updated: SavedRoom) {
+    setRooms((prev) =>
+      prev.map((room) => (room.id === updated.id ? updated : room)),
+    );
+  }
+
+  function handleDeleted(id: string) {
+    setRooms((prev) => prev.filter((room) => room.id !== id));
   }
 
   return (
@@ -53,47 +59,44 @@ export default function RoomsPage() {
               key={room.id}
               className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/50"
             >
-              <div className="flex gap-3 p-3">
-                <Link
-                  href={`/rooms/${room.id}`}
-                  className="flex min-w-0 flex-1 gap-3 transition hover:opacity-90"
-                >
-                  {room.image ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={room.image}
-                      alt=""
-                      className="h-16 w-16 shrink-0 rounded-xl object-cover"
-                    />
-                  ) : (
-                    <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl bg-slate-800">
-                      <DoorOpen className="h-6 w-6 text-slate-500" />
+              <div className="p-3">
+                <div className="flex gap-3">
+                  <Link
+                    href={`/rooms/${room.id}`}
+                    className="flex min-w-0 flex-1 gap-3 transition hover:opacity-90"
+                  >
+                    {room.image ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={room.image}
+                        alt=""
+                        className="h-16 w-16 shrink-0 rounded-xl object-cover"
+                      />
+                    ) : (
+                      <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl bg-slate-800">
+                        <DoorOpen className="h-6 w-6 text-slate-500" />
+                      </div>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate font-semibold text-slate-100">
+                        {room.label}
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        {room.scanMode === "video360" ? "360° video" : "Photo"}{" "}
+                        · {new Date(room.createdAt).toLocaleDateString()}
+                      </p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        Tap to view scan
+                      </p>
                     </div>
-                  )}
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate font-semibold text-slate-100">
-                      {room.label}
-                    </p>
-                    <p className="text-xs text-slate-500">
-                      {room.scanMode === "video360" ? "360° video" : "Photo"} ·{" "}
-                      {new Date(room.createdAt).toLocaleDateString()}
-                    </p>
-                    <p className="mt-1 text-xs text-slate-500">
-                      Tap to view scan
-                    </p>
-                  </div>
-                </Link>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    void handleDelete(room.id);
-                  }}
-                  className="shrink-0 self-start rounded-lg p-2 text-slate-500 transition hover:bg-red-500/10 hover:text-red-400"
-                  aria-label={`Delete ${room.label}`}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
+                  </Link>
+                </div>
+                <RoomManageActions
+                  room={room}
+                  rooms={rooms}
+                  onUpdated={handleUpdated}
+                  onDeleted={handleDeleted}
+                />
               </div>
             </li>
           ))}

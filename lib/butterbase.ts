@@ -90,4 +90,17 @@ export const butterbase = {
 
   list: <T>(table = DEFAULT_TABLE) =>
     request<T[]>(`/${table}`, { method: "GET" }),
+
+  update: <T extends Record<string, unknown>>(
+    id: string,
+    record: T,
+    table = DEFAULT_TABLE,
+  ) =>
+    request<{ id: string }>(`/${table}/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(record),
+    }),
+
+  delete: (id: string, table = DEFAULT_TABLE) =>
+    request<{ id: string }>(`/${table}/${id}`, { method: "DELETE" }),
 };

@@ -130,6 +130,34 @@ export async function deleteRoom(id: string): Promise<void> {
   }
 }
 
+export async function renameRoom(id: string, label: string): Promise<SavedRoom> {
+  const res = await fetch(`/api/rooms/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ label: label.trim() }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body?.error ?? `Rename failed (${res.status})`);
+  }
+
+  const existing = getRoomById(id);
+  if (!existing) {
+    throw new Error("Room not found.");
+  }
+
+  const updated = normalizeSavedRoom({ ...existing, label: label.trim() });
+  upsertRoomLocal(updated);
+  return updated;
+}
+
+export async function rescanRoom(
+  id: string,
+  payload: Record<string, unknown>,
+): Promise<SavedRoom> {
+  return setupRoom({ ...payload, roomId: id });
+}
+
 export async function setupRoom(
   payload: Record<string, unknown>,
 ): Promise<SavedRoom> {

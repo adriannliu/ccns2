@@ -36,7 +36,7 @@ export async function POST(req: Request) {
         const r = raw as SavedRoom;
         return { id: String(r.id ?? ""), label: String(r.label ?? "") };
       });
-      if (isDuplicateRoomLabel(label, existing)) {
+      if (isDuplicateRoomLabel(label, existing, body.roomId)) {
         return NextResponse.json(
           {
             error: `A room named "${label}" already exists. Choose a different name.`,
@@ -117,7 +117,7 @@ export async function POST(req: Request) {
     }
 
     const room: SavedRoom = {
-      id: `room_${Date.now()}`,
+      id: body.roomId?.trim() || `room_${Date.now()}`,
       label,
       image: displayUrl,
       panorama: body.panorama,
@@ -130,23 +130,24 @@ export async function POST(req: Request) {
     };
 
     if (isButterbaseConfigured()) {
-      const res = await butterbase.insert(
-        {
-          id: room.id,
-          label: room.label,
-          image: room.image,
-          panorama: room.panorama,
-          scanMode: room.scanMode,
-          createdAt: room.createdAt,
-          plans_json: JSON.stringify(room.plans),
-          frame_images_json: frameImages ? JSON.stringify(frameImages) : undefined,
-          frame_keys_json: frameKeys ? JSON.stringify(frameKeys) : undefined,
-          frame_plans_json: framePlans ? JSON.stringify(framePlans) : undefined,
-          created_at: new Date().toISOString(),
-        },
-        TABLE,
-      );
-      if (res.success && res.id) room.id = res.id;
+      const record = {
+        id: room.id,
+        label: room.label,
+        image: room.image,
+        panorama: room.panorama,
+        scanMode: room.scanMode,
+        createdAt: room.createdAt,
+        plans_json: JSON.stringify(room.plans),
+        frame_images_json: frameImages ? JSON.stringify(frameImages) : undefined,
+        frame_keys_json: frameKeys ? JSON.stringify(frameKeys) : undefined,
+        frame_plans_json: framePlans ? JSON.stringify(framePlans) : undefined,
+        updated_at: new Date().toISOString(),
+      };
+
+      const res = body.roomId
+        ? await butterbase.update(room.id, record, TABLE)
+        : await butterbase.insert(record, TABLE);
+      if (!body.roomId && res.success && res.id) room.id = res.id;
     }
 
     return NextResponse.json(room);

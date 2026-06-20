@@ -103,6 +103,8 @@ export interface SetupRoomRequest extends Omit<AnalyzeRequest, "scenario"> {
   /** Display image when S3 presign is unavailable. */
   previewImage?: string;
   panorama?: string;
+  /** Re-scan: update an existing room in place (keeps id). */
+  roomId?: string;
 }
 
 export interface AnalysisResult {

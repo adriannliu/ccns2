@@ -2,26 +2,29 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import ImageOverlay from "@/components/ImageOverlay";
+import RoomManageActions from "@/components/RoomManageActions";
 import RoomModelView from "@/components/RoomModelView";
-import { getRoomById, listRooms } from "@/lib/roomLibrary";
+import { listRooms } from "@/lib/roomLibrary";
 import { buildPlansMapView, buildRoomMapView } from "@/lib/roomMapView";
 import type { AnalysisResult, SavedRoom } from "@/lib/types";
 
 export default function RoomDetailPage() {
   const params = useParams();
+  const router = useRouter();
   const id = typeof params.id === "string" ? params.id : "";
   const [room, setRoom] = useState<SavedRoom | null>(null);
+  const [rooms, setRooms] = useState<SavedRoom[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const cached = getRoomById(id);
-    if (cached) setRoom(cached);
-
     void listRooms()
-      .then((rooms) => setRoom(rooms.find((r) => r.id === id) ?? cached ?? null))
+      .then((all) => {
+        setRooms(all);
+        setRoom(all.find((r) => r.id === id) ?? null);
+      })
       .finally(() => setLoading(false));
   }, [id]);
 
@@ -108,7 +111,20 @@ export default function RoomDetailPage() {
         </div>
       </header>
 
-      <section className="space-y-4">
+      <RoomManageActions
+        room={room}
+        rooms={rooms}
+        layout="header"
+        onUpdated={(updated) => {
+          setRoom(updated);
+          setRooms((prev) =>
+            prev.map((entry) => (entry.id === updated.id ? updated : entry)),
+          );
+        }}
+        onDeleted={() => router.push("/rooms")}
+      />
+
+      <section className="mt-4 space-y-4">
         {mapView.room_model ? (
           <RoomModelView model={mapView.room_model} hideHazards />
         ) : null}
