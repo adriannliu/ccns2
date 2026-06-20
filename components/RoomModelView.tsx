@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useId } from "react";
 import { roomModelCaption } from "@/lib/exitPath";
 import { normalizeRoomModel } from "@/lib/roomModel";
 import type { LandmarkType, Point2D, RoomModel, Scenario } from "@/lib/types";
@@ -63,6 +63,8 @@ export default function RoomModelView({
   className = "",
 }: RoomModelViewProps) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const uid = useId().replace(/:/g, "");
+  const gridId = `floor-grid-${uid}`;
 
   const safeModel = useMemo(() => normalizeRoomModel(model), [model]);
 
@@ -106,7 +108,7 @@ export default function RoomModelView({
         {/* Floor grid */}
         <defs>
           <pattern
-            id="floor-grid"
+            id={gridId}
             width="0.1"
             height="0.1"
             patternUnits="userSpaceOnUse"
@@ -119,7 +121,7 @@ export default function RoomModelView({
             />
           </pattern>
         </defs>
-        <rect width="1" height="1" fill="url(#floor-grid)" />
+        <rect width="1" height="1" fill={`url(#${gridId})`} />
 
         {/* Walls */}
         {safeModel.walls?.map((wall, i) => {

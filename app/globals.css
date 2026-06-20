@@ -25,3 +25,29 @@ body {
     linear-gradient(to bottom, rgba(16, 185, 129, 0.06) 1px, transparent 1px);
   background-size: 28px 28px;
 }
+
+@media print {
+  body {
+    background: white !important;
+    color: black !important;
+    padding: 0;
+  }
+
+  .bg-grid {
+    background: white !important;
+  }
+
+  nav,
+  .print\\:hidden {
+    display: none !important;
+  }
+
+  main {
+    max-width: 100% !important;
+    padding: 0 !important;
+  }
+
+  .print-plan-root {
+    break-inside: avoid;
+  }
+}

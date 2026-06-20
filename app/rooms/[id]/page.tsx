@@ -3,14 +3,20 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { ArrowLeft, Loader2, Siren } from "lucide-react";
+import CachedRoomImage from "@/components/CachedRoomImage";
+import DrillMode from "@/components/DrillMode";
 import ImageOverlay from "@/components/ImageOverlay";
+import PlanRegionLists from "@/components/PlanRegionLists";
+import PrintPlanButton from "@/components/PrintPlanButton";
 import RoomManageActions from "@/components/RoomManageActions";
 import RoomModelView from "@/components/RoomModelView";
+import { imageOverlayCaption } from "@/lib/exitPath";
+import { formatPlanAge, isPlanStale } from "@/lib/planAge";
 import { listRooms } from "@/lib/roomLibrary";
 import { buildPlansMapView, buildRoomMapView } from "@/lib/roomMapView";
-import { imageOverlayCaption } from "@/lib/exitPath";
-import type { AnalysisResult, SavedRoom } from "@/lib/types";
+import { SCENARIOS } from "@/lib/scenarios";
+import type { AnalysisResult, SavedRoom, Scenario } from "@/lib/types";
 
 export default function RoomDetailPage() {
   const params = useParams();
@@ -19,6 +25,9 @@ export default function RoomDetailPage() {
   const [room, setRoom] = useState<SavedRoom | null>(null);
   const [rooms, setRooms] = useState<SavedRoom[]>([]);
   const [loading, setLoading] = useState(true);
+  const [previewScenario, setPreviewScenario] = useState<Scenario | "merged">(
+    "merged",
+  );
 
   useEffect(() => {
     void listRooms()
@@ -43,30 +52,45 @@ export default function RoomDetailPage() {
     }
   }, [room]);
 
+  const scenarioPreview = useMemo((): AnalysisResult | null => {
+    if (!room || previewScenario === "merged") return mapView;
+    return room.plans[previewScenario] ?? null;
+  }, [room, previewScenario, mapView]);
+
   const labeledFrames = useMemo(() => {
     if (!room?.frameImages?.length || !room.framePlans?.length) return [];
     return room.frameImages.map((imageSrc, index) => {
       const plans = room.framePlans?.[index];
-      const result: AnalysisResult = plans
-        ? buildPlansMapView(plans)
-        : {
-            egress_points: [],
-            safe_zones: [],
-            hazards: [],
-            actionable_instructions: [],
-          };
+      const result: AnalysisResult =
+        previewScenario === "merged"
+          ? plans
+            ? buildPlansMapView(plans)
+            : {
+                egress_points: [],
+                safe_zones: [],
+                hazards: [],
+                actionable_instructions: [],
+              }
+          : plans?.[previewScenario] ?? {
+              egress_points: [],
+              safe_zones: [],
+              hazards: [],
+              actionable_instructions: [],
+            };
       const overlayCount =
         result.egress_points.length + result.safe_zones.length;
       return { imageSrc, result, overlayCount, index };
     });
-  }, [room]);
+  }, [room, previewScenario]);
 
   const hasLabeledFrames = labeledFrames.some((frame) => frame.overlayCount > 0);
 
   const overlayCount = useMemo(() => {
-    if (!mapView) return 0;
-    return mapView.egress_points.length + mapView.safe_zones.length;
-  }, [mapView]);
+    if (!scenarioPreview) return 0;
+    return (
+      scenarioPreview.egress_points.length + scenarioPreview.safe_zones.length
+    );
+  }, [scenarioPreview]);
 
   if (loading) {
     return (
@@ -76,7 +100,7 @@ export default function RoomDetailPage() {
     );
   }
 
-  if (!room || !mapView) {
+  if (!room || !mapView || !scenarioPreview) {
     return (
       <main className="bg-grid mx-auto flex min-h-screen w-full max-w-md flex-col px-5 pt-6">
         <Link
@@ -91,12 +115,15 @@ export default function RoomDetailPage() {
     );
   }
 
+  const planAge = formatPlanAge(room.createdAt);
+  const stale = isPlanStale(room.createdAt);
+
   return (
-    <main className="bg-grid mx-auto flex min-h-screen w-full max-w-md flex-col px-5 pt-6 pb-24">
+    <main className="print-plan-root bg-grid mx-auto flex min-h-screen w-full max-w-md flex-col px-5 pt-6 pb-24">
       <header className="mb-6 flex items-center gap-3">
         <Link
           href="/rooms"
-          className="rounded-full border border-slate-800 bg-slate-900/60 p-2 text-slate-300 transition hover:text-white"
+          className="rounded-full border border-slate-800 bg-slate-900/60 p-2 text-slate-300 transition hover:text-white print:hidden"
           aria-label="Back to saved rooms"
         >
           <ArrowLeft className="h-5 w-5" />
@@ -109,8 +136,25 @@ export default function RoomDetailPage() {
             {room.scanMode === "video360" ? "360° video scan" : "Photo scan"} ·{" "}
             {new Date(room.createdAt).toLocaleDateString()}
           </p>
+          <p
+            className={`mt-0.5 text-xs ${stale ? "text-amber-400" : "text-slate-500"}`}
+          >
+            {planAge}
+            {stale ? " — consider re-scanning" : ""}
+          </p>
         </div>
+        <PrintPlanButton className="print:hidden" />
       </header>
+
+      <div className="mb-4 flex flex-wrap gap-2 print:hidden">
+        <Link
+          href={`/emergency?room=${room.id}`}
+          className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-red-500/15 px-4 py-3 text-sm font-bold text-red-300 ring-1 ring-red-500/30"
+        >
+          <Siren className="h-4 w-4" />
+          View emergency plan
+        </Link>
+      </div>
 
       <RoomManageActions
         room={room}
@@ -125,8 +169,37 @@ export default function RoomDetailPage() {
         onDeleted={() => router.push("/rooms")}
       />
 
+      <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/80 p-3 print:hidden">
+        <p className="mb-2 text-xs font-semibold uppercase tracking-widest text-slate-500">
+          Preview scenario
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <ScenarioTab
+            active={previewScenario === "merged"}
+            label="All scenarios"
+            onClick={() => setPreviewScenario("merged")}
+          />
+          {SCENARIOS.map((s) => (
+            <ScenarioTab
+              key={s.id}
+              active={previewScenario === s.id}
+              label={s.label}
+              onClick={() => setPreviewScenario(s.id)}
+            />
+          ))}
+        </div>
+      </div>
+
+      <DrillMode room={room} />
+
       <section className="mt-4 space-y-4">
-        {mapView.room_model ? (
+        {scenarioPreview.room_model ? (
+          <RoomModelView
+            model={scenarioPreview.room_model}
+            scenario={previewScenario === "merged" ? undefined : previewScenario}
+            hideHazards
+          />
+        ) : mapView.room_model && previewScenario === "merged" ? (
           <RoomModelView model={mapView.room_model} hideHazards />
         ) : null}
 
@@ -135,8 +208,8 @@ export default function RoomDetailPage() {
             <p className="border-b border-slate-800 px-4 py-2 text-xs font-semibold uppercase tracking-widest text-slate-500">
               Panorama
             </p>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
+            <CachedRoomImage
+              roomId={room.id}
               src={room.panorama}
               alt={`Panorama of ${room.label}`}
               className="max-h-48 w-full object-cover"
@@ -165,22 +238,31 @@ export default function RoomDetailPage() {
                     {index + 1} of {labeledFrames.length}
                   </p>
                   <p className="text-xs text-slate-500">
-                    {imageOverlayCaption(result)}
+                    {imageOverlayCaption(
+                      result,
+                      previewScenario === "merged" ? undefined : previewScenario,
+                    )}
                   </p>
                 </div>
                 <div className="overflow-visible p-3">
                   {overlayCount > 0 ? (
                     <ImageOverlay
                       imageSrc={imageSrc}
+                      cacheRoomId={room.id}
+                      cacheIndex={index}
                       result={result}
+                      scenario={
+                        previewScenario === "merged" ? undefined : previewScenario
+                      }
                       variant="library"
                       maxHeightClass="max-h-[45vh]"
                     />
                   ) : (
                     <div className="space-y-3">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
+                      <CachedRoomImage
+                        roomId={room.id}
                         src={imageSrc}
+                        index={index}
                         alt={`Frame ${index + 1}`}
                         className="max-h-[45vh] w-full rounded-xl object-contain"
                       />
@@ -201,14 +283,21 @@ export default function RoomDetailPage() {
                 Labeled scan
               </p>
               <p className="text-xs text-slate-400">
-                {imageOverlayCaption(mapView)}
+                {imageOverlayCaption(
+                  scenarioPreview,
+                  previewScenario === "merged" ? undefined : previewScenario,
+                )}
               </p>
             </div>
             <div className="overflow-visible p-3">
               {overlayCount > 0 ? (
                 <ImageOverlay
                   imageSrc={room.image}
-                  result={mapView}
+                  cacheRoomId={room.id}
+                  result={scenarioPreview}
+                  scenario={
+                    previewScenario === "merged" ? undefined : previewScenario
+                  }
                   variant="library"
                   maxHeightClass="max-h-[55vh]"
                 />
@@ -231,7 +320,35 @@ export default function RoomDetailPage() {
             the Set Up tab to rebuild the map.
           </p>
         ) : null}
+
+        {previewScenario !== "merged" && overlayCount > 0 ? (
+          <PlanRegionLists result={scenarioPreview} />
+        ) : null}
       </section>
     </main>
+  );
+}
+
+function ScenarioTab({
+  active,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+        active
+          ? "bg-emerald-500 text-slate-950"
+          : "border border-slate-800 text-slate-400 hover:text-slate-200"
+      }`}
+    >
+      {label}
+    </button>
   );
 }

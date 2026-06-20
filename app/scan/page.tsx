@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, useEffect, useRef, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -18,6 +18,12 @@ import type { SavedRoom, ScanMode } from "@/lib/types";
 import { getRoomById, listRooms, rescanRoom, setupRoom } from "@/lib/roomLibrary";
 import { isDuplicateRoomLabel } from "@/lib/roomLabel";
 import { extractVideoScan } from "@/lib/videoFrames";
+import SetupProgressPanel, {
+  buildSetupSteps,
+  createSetupProgressDriver,
+  type SetupProgressState,
+} from "@/components/SetupProgressPanel";
+import SetupSuccessScreen from "@/components/SetupSuccessScreen";
 
 type CaptureTab = ScanMode;
 
@@ -50,7 +56,6 @@ export default function ScanPage() {
 }
 
 function ScanPageContent() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const rescanId = searchParams.get("rescan")?.trim() || null;
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -63,6 +68,8 @@ function ScanPageContent() {
   const [videoPanorama, setVideoPanorama] = useState<string | null>(null);
   const [videoExtracting, setVideoExtracting] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState<SetupProgressState | null>(null);
+  const [savedRoom, setSavedRoom] = useState<SavedRoom | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [rescanRoomMissing, setRescanRoomMissing] = useState(false);
@@ -100,6 +107,12 @@ function ScanPageContent() {
 
   function switchTab(tab: CaptureTab) {
     if (tab === captureTab) return;
+    if (hasCapture) {
+      const ok = window.confirm(
+        "Switching capture type will clear your current media. Continue?",
+      );
+      if (!ok) return;
+    }
     setCaptureTab(tab);
     clearCapture();
   }
@@ -183,6 +196,7 @@ function ScanPageContent() {
 
   async function uploadDataUrlsToS3(
     dataUrls: string[],
+    onFileUploaded?: (completed: number, total: number) => void,
   ): Promise<string[] | null> {
     const keys: string[] = [];
     for (let i = 0; i < dataUrls.length; i++) {
@@ -193,6 +207,7 @@ function ScanPageContent() {
       );
       if (!uploaded) return null;
       keys.push(uploaded.key);
+      onFileUploaded?.(i + 1, dataUrls.length);
     }
     return keys;
   }
@@ -246,50 +261,114 @@ function ScanPageContent() {
     if (!hasCapture || !trimmedLabel || labelTaken) return;
     setLoading(true);
     setError(null);
+    setSavedRoom(null);
+
+    const mediaCount = isPhoto ? photos.length : videoFrames.length;
+    const { messages } = buildSetupSteps(isPhoto, mediaCount);
+    const driver = createSetupProgressDriver(messages, setProgress);
+
+    // First step after upload completes (before scenario plans).
+    const analysisStartStep = !isPhoto
+      ? 1
+      : mediaCount > 1
+        ? mediaCount
+        : 1;
 
     try {
       const save = rescanId
-        ? (payload: Record<string, unknown>) => rescanRoom(rescanId, payload)
+        ? (payload: Record<string, unknown>, previews?: string[]) =>
+            rescanRoom(rescanId, payload, previews)
         : setupRoom;
+
+      let room: SavedRoom;
 
       if (isPhoto) {
         const previews = photos.map((p) => p.preview);
         if (photos.length === 1) {
+          driver.setUploadProgress(0, 1);
           const uploaded = await uploadToS3(photos[0].file);
-          await save({
-            label: roomLabel.trim(),
-            scanMode: "photo",
-            previewImage: previews[0],
-            ...(uploaded
-              ? { imageKey: uploaded.key, imageContentType: uploaded.contentType }
-              : { image: previews[0] }),
-          });
+          driver.setUploadProgress(1, 1);
+          driver.startAnalysisPhase(analysisStartStep);
+          room = await save(
+            {
+              label: roomLabel.trim(),
+              scanMode: "photo",
+              previewImage: previews[0],
+              ...(uploaded
+                ? { imageKey: uploaded.key, imageContentType: uploaded.contentType }
+                : { image: previews[0] }),
+            },
+            previews,
+          );
         } else {
-          const frameKeys = await uploadDataUrlsToS3(previews);
-          await save({
-            label: roomLabel.trim(),
-            scanMode: "photo",
-            previewImage: previews[0],
-            ...(frameKeys ? { frameKeys } : { frames: previews }),
+          const frameKeys = await uploadDataUrlsToS3(previews, (done, total) => {
+            driver.setUploadProgress(done, total);
           });
+          if (!frameKeys) {
+            driver.setUploadProgress(previews.length, previews.length);
+          }
+          driver.startAnalysisPhase(analysisStartStep);
+          room = await save(
+            {
+              label: roomLabel.trim(),
+              scanMode: "photo",
+              previewImage: previews[0],
+              ...(frameKeys ? { frameKeys } : { frames: previews }),
+            },
+            previews,
+          );
         }
       } else {
-        const frameKeys = await uploadDataUrlsToS3(videoFrames);
-        await save({
-          label: roomLabel.trim(),
-          scanMode: "video360",
-          previewImage: videoFrames[0],
-          panorama: videoPanorama ?? undefined,
-          ...(frameKeys ? { frameKeys } : { frames: videoFrames }),
+        driver.setUploadProgress(0, videoFrames.length);
+        const frameKeys = await uploadDataUrlsToS3(videoFrames, (done, total) => {
+          driver.setUploadProgress(done, total);
         });
+        if (!frameKeys) {
+          driver.setUploadProgress(videoFrames.length, videoFrames.length);
+        }
+        driver.startAnalysisPhase(analysisStartStep);
+        room = await save(
+          {
+            label: roomLabel.trim(),
+            scanMode: "video360",
+            previewImage: videoFrames[0],
+            panorama: videoPanorama ?? undefined,
+            ...(frameKeys ? { frameKeys } : { frames: videoFrames }),
+          },
+          videoFrames,
+        );
       }
-      router.push(rescanId ? `/rooms/${rescanId}` : "/rooms");
+
+      driver.finish();
+      setSavedRoom(room);
+      setProgress(null);
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Something went wrong. Try again.",
       );
+      setProgress(null);
+    } finally {
+      driver.destroy();
       setLoading(false);
     }
+  }
+
+  function resetForAnotherRoom() {
+    setSavedRoom(null);
+    setRoomLabel("");
+    clearCapture();
+    setProgress(null);
+    void listRooms().then(setExistingRooms);
+  }
+
+  if (savedRoom) {
+    return (
+      <SetupSuccessScreen
+        room={savedRoom}
+        rescanId={rescanId}
+        onAddAnother={resetForAnotherRoom}
+      />
+    );
   }
 
   function openFilePicker(replace = false) {
@@ -397,6 +476,26 @@ function ScanPageContent() {
             Photo
           </button>
         </div>
+
+        <ul className="mb-3 space-y-1 rounded-xl border border-slate-800 bg-slate-900/40 px-4 py-3 text-xs text-slate-400">
+          {isPhoto ? (
+            <>
+              <li>Include the main door and key furniture in frame</li>
+              <li>Hold the phone at chest height, facing into the room</li>
+              {photos.length > 1 ? (
+                <li>Each photo will be labeled individually</li>
+              ) : (
+                <li>Add multiple photos for different angles</li>
+              )}
+            </>
+          ) : (
+            <>
+              <li>Slowly pan a full circle at chest height</li>
+              <li>Keep the camera steady — about 10 seconds total</li>
+              <li>Include doors, windows, and major furniture</li>
+            </>
+          )}
+        </ul>
 
         <input
           ref={fileInputRef}
@@ -558,6 +657,8 @@ function ScanPageContent() {
           </div>
         )}
       </section>
+
+      {progress ? <SetupProgressPanel progress={progress} /> : null}
 
       {error ? (
         <p className="mb-4 rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">

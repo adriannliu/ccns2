@@ -1,11 +1,12 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useId, useEffect } from "react";
 import { bboxCenter, normalizeBBox } from "@/lib/bbox";
 import {
   USER_POSITION,
   pickRecommendedEgress,
 } from "@/lib/exitPath";
+import { resolveRoomImage } from "@/lib/imageCache";
 import type {
   AnalysisResult,
   BBox,
@@ -17,6 +18,9 @@ import type {
 interface ImageOverlayProps {
   imageSrc: string;
   result: AnalysisResult;
+  /** When set, resolves image from IndexedDB cache first. */
+  cacheRoomId?: string;
+  cacheIndex?: number;
   /** When set, hides the exit path during earthquake (cover zones only). */
   scenario?: Scenario;
   /** Saved-rooms library: always-visible inside labels. */
@@ -112,11 +116,29 @@ function flatten(result: AnalysisResult): OverlayRegion[] {
 export default function ImageOverlay({
   imageSrc,
   result,
+  cacheRoomId,
+  cacheIndex = 0,
   scenario,
   variant = "default",
   maxHeightClass = "max-h-[70vh]",
   className = "",
 }: ImageOverlayProps) {
+  const [resolvedSrc, setResolvedSrc] = useState(imageSrc);
+
+  useEffect(() => {
+    if (!cacheRoomId) {
+      setResolvedSrc(imageSrc);
+      return;
+    }
+    let active = true;
+    void resolveRoomImage(cacheRoomId, imageSrc, cacheIndex).then((url) => {
+      if (active) setResolvedSrc(url);
+    });
+    return () => {
+      active = false;
+    };
+  }, [cacheRoomId, cacheIndex, imageSrc]);
+
   const isLibrary = variant === "library";
   const showExitPath = !scenario || scenario !== "EARTHQUAKE";
   const regions = useMemo(() => flatten(result), [result]);
@@ -130,6 +152,8 @@ export default function ImageOverlay({
     [recommendedExit],
   );
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const uid = useId().replace(/:/g, "");
+  const arrowId = `exit-path-arrow-${uid}`;
 
   return (
     <div className={`flex w-full justify-center ${className}`}>
@@ -142,7 +166,7 @@ export default function ImageOverlay({
       <div className="relative inline-block">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
-          src={imageSrc}
+          src={resolvedSrc}
           alt="Scanned room"
           className={`block h-auto w-auto max-w-full rounded-xl ${maxHeightClass} object-contain`}
         />
@@ -157,7 +181,7 @@ export default function ImageOverlay({
           >
             <defs>
               <marker
-                id="exit-path-arrow"
+                id={arrowId}
                 markerWidth="0.05"
                 markerHeight="0.05"
                 refX="0.04"
@@ -179,7 +203,7 @@ export default function ImageOverlay({
               strokeWidth={0.008}
               strokeDasharray="0.028 0.02"
               strokeLinecap="round"
-              markerEnd="url(#exit-path-arrow)"
+              markerEnd={`url(#${arrowId})`}
               opacity={0.95}
             />
             <circle

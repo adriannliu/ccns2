@@ -1,4 +1,5 @@
 import type { SavedRoom } from "./types";
+import { cacheRoomImages } from "./imageCache";
 import { roomLabelCount } from "./roomLabels";
 import {
   deleteRoomPlans,
@@ -154,12 +155,14 @@ export async function renameRoom(id: string, label: string): Promise<SavedRoom> 
 export async function rescanRoom(
   id: string,
   payload: Record<string, unknown>,
+  localPreviews?: string[],
 ): Promise<SavedRoom> {
-  return setupRoom({ ...payload, roomId: id });
+  return setupRoom({ ...payload, roomId: id }, localPreviews);
 }
 
 export async function setupRoom(
   payload: Record<string, unknown>,
+  localPreviews?: string[],
 ): Promise<SavedRoom> {
   const res = await fetch("/api/rooms/setup", {
     method: "POST",
@@ -173,5 +176,6 @@ export async function setupRoom(
   const room = (await res.json()) as SavedRoom;
   const normalized = normalizeSavedRoom(room);
   upsertRoomLocal(normalized);
+  await cacheRoomImages(normalized, localPreviews);
   return normalized;
 }

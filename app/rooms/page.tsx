@@ -5,6 +5,7 @@ import Link from "next/link";
 import { DoorOpen, Loader2, MapPin, Plus } from "lucide-react";
 import RoomManageActions from "@/components/RoomManageActions";
 import { listRooms } from "@/lib/roomLibrary";
+import { formatPlanAge, isPlanStale } from "@/lib/planAge";
 import type { SavedRoom } from "@/lib/types";
 
 export default function RoomsPage() {
@@ -84,6 +85,16 @@ export default function RoomsPage() {
                       <p className="text-xs text-slate-500">
                         {room.scanMode === "video360" ? "360° video" : "Photo"}{" "}
                         · {new Date(room.createdAt).toLocaleDateString()}
+                      </p>
+                      <p
+                        className={`mt-0.5 text-xs ${
+                          isPlanStale(room.createdAt)
+                            ? "text-amber-400"
+                            : "text-slate-500"
+                        }`}
+                      >
+                        {formatPlanAge(room.createdAt)}
+                        {isPlanStale(room.createdAt) ? " · re-scan recommended" : ""}
                       </p>
                       <p className="mt-1 text-xs text-slate-500">
                         Tap to view scan

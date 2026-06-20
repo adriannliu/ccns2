@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Flame, Activity, ShieldAlert, ScanLine, Radar, Siren } from "lucide-react";
+import HomeRoomsLink from "@/components/HomeRoomsLink";
 
 export default function HomePage() {
   return (
@@ -32,7 +33,7 @@ export default function HomePage() {
         <div className="mt-8 grid grid-cols-3 gap-3">
           <ScenarioPill icon={<Flame className="h-5 w-5" />} label="Fire" />
           <ScenarioPill icon={<Activity className="h-5 w-5" />} label="Earthquake" />
-          <ScenarioPill icon={<ShieldAlert className="h-5 w-5" />} label="Lockdown" />
+          <ScenarioPill icon={<ShieldAlert className="h-5 w-5" />} label="Code Red" />
         </div>
       </div>
 
@@ -51,6 +52,7 @@ export default function HomePage() {
           <Siren className="h-6 w-6" />
           Emergency — I need help now
         </Link>
+        <HomeRoomsLink />
         <p className="text-center text-xs text-slate-500">
           Scan rooms during calm times · use Emergency when it matters
         </p>
