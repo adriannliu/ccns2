@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { butterbase, isButterbaseConfigured } from "@/lib/butterbase";
 import { buildAnalyzeInput, resolveDisplayImageUrl } from "@/lib/analyzeInput";
 import { isDuplicateRoomLabel } from "@/lib/roomLabel";
+import { roomLabelCount } from "@/lib/roomLabels";
 import { ALL_SCENARIOS, runSpatialAnalysis } from "@/lib/spatialAnalysis";
 import type { SavedRoom, ScenarioPlans, SetupRoomRequest } from "@/lib/types";
 
@@ -60,15 +61,36 @@ export async function POST(req: Request) {
     );
 
     const plans = Object.fromEntries(results) as ScenarioPlans;
+
+    const labelProbe: SavedRoom = {
+      id: "probe",
+      label,
+      image: "",
+      scanMode: body.scanMode ?? built.input.mode,
+      plans,
+      createdAt: Date.now(),
+    };
+
+    if (roomLabelCount(labelProbe) === 0) {
+      return NextResponse.json(
+        {
+          error:
+            "The vision model did not return any room labels. Try a clearer photo with the door and main furniture visible, then scan again.",
+        },
+        { status: 502 },
+      );
+    }
+
     const displayUrl =
+      (await resolveDisplayImageUrl(built.input, built.imageUrl)) ??
       body.previewImage ??
       body.panorama ??
-      (await resolveDisplayImageUrl(built.input, built.imageUrl));
+      "";
 
     const room: SavedRoom = {
       id: `room_${Date.now()}`,
       label,
-      image: displayUrl ?? body.previewImage ?? "",
+      image: displayUrl,
       panorama: body.panorama,
       scanMode: body.scanMode ?? built.input.mode,
       plans,
@@ -77,7 +99,16 @@ export async function POST(req: Request) {
 
     if (isButterbaseConfigured()) {
       const res = await butterbase.insert(
-        { ...room, created_at: new Date().toISOString() },
+        {
+          id: room.id,
+          label: room.label,
+          image: room.image,
+          panorama: room.panorama,
+          scanMode: room.scanMode,
+          createdAt: room.createdAt,
+          plans_json: JSON.stringify(room.plans),
+          created_at: new Date().toISOString(),
+        },
         TABLE,
       );
       if (res.success && res.id) room.id = res.id;

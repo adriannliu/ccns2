@@ -101,7 +101,7 @@ export default function EmergencyPage() {
             <ListChecks className="h-4 w-4" /> What to do now
           </h2>
           <ol className="space-y-2">
-            {plan.actionable_instructions.map((stepText, i) => (
+            {(plan.actionable_instructions ?? []).map((stepText, i) => (
               <li
                 key={i}
                 className="flex gap-3 rounded-2xl border border-slate-800 bg-slate-900/50 p-4"

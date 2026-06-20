@@ -24,7 +24,7 @@ export default function RoomsPage() {
       <header className="mb-6">
         <h1 className="text-xl font-bold tracking-tight">Saved rooms</h1>
         <p className="mt-1 text-sm text-slate-400">
-          Floor plans mapped during setup — used in an emergency.
+          Labeled room scans from setup.
         </p>
       </header>
 
@@ -78,8 +78,8 @@ export default function RoomsPage() {
                       {room.scanMode === "video360" ? "360° video" : "Photo"} ·{" "}
                       {new Date(room.createdAt).toLocaleDateString()}
                     </p>
-                    <p className="mt-1 text-xs text-emerald-400/80">
-                      Tap to view exits, cover zones & hazards
+                    <p className="mt-1 text-xs text-slate-500">
+                      Tap to view scan
                     </p>
                   </div>
                 </Link>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { bboxCenter, normalizeBBox } from "@/lib/bbox";
 import type {
   AccessibilityStatus,
   AnalysisResult,
@@ -17,6 +18,8 @@ interface ImageOverlayProps {
   result: AnalysisResult;
   /** When set, hides the exit path during earthquake (cover zones only). */
   scenario?: Scenario;
+  /** Saved-rooms library: always-visible inside labels. */
+  variant?: "default" | "library";
   /** Max height (in viewport-aware CSS) the image is allowed to occupy. */
   maxHeightClass?: string;
   className?: string;
@@ -71,31 +74,6 @@ const EGRESS_TYPE_RANK: Record<EgressType, number> = {
 function clamp01(n: number): number {
   if (typeof n !== "number" || Number.isNaN(n)) return 0;
   return Math.min(1, Math.max(0, n));
-}
-
-/**
- * Coerce whatever the VLM returned into a valid [ymin, xmin, ymax, xmax] tuple.
- * The model occasionally emits malformed coordinates (missing, wrong length,
- * or non-array), which previously crashed destructuring with "param is not
- * iterable". Returns null when the box can't be salvaged.
- */
-function normalizeBBox(coordinates: unknown): BBox | null {
-  if (!Array.isArray(coordinates) || coordinates.length < 4) return null;
-  const nums = coordinates
-    .slice(0, 4)
-    .map((v) => (typeof v === "number" ? v : Number(v)));
-  if (nums.some((n) => Number.isNaN(n))) return null;
-  return nums as BBox;
-}
-
-function bboxCenter(coordinates: BBox): { x: number; y: number } {
-  const box = normalizeBBox(coordinates);
-  if (!box) return { x: 0.5, y: 0.5 };
-  const [ymin, xmin, ymax, xmax] = box;
-  return {
-    x: (clamp01(xmin) + clamp01(xmax)) / 2,
-    y: (clamp01(ymin) + clamp01(ymax)) / 2,
-  };
 }
 
 function dist(
@@ -164,8 +142,8 @@ function flatten(result: AnalysisResult): OverlayRegion[] {
     ...(result.safe_zones ?? []).map<OverlayRegion>((r) => ({
       kind: "safe_zone",
       coordinates: r.coordinates,
-      label: r.type,
-      detail: r.effectiveness_rating,
+      label: r.description?.trim() || r.type,
+      detail: r.type,
     })),
     ...(result.hazards ?? []).map<OverlayRegion>((r) => ({
       kind: "hazard",
@@ -180,9 +158,11 @@ export default function ImageOverlay({
   imageSrc,
   result,
   scenario,
+  variant = "default",
   maxHeightClass = "max-h-[70vh]",
   className = "",
 }: ImageOverlayProps) {
+  const isLibrary = variant === "library";
   const showExitPath = !scenario || scenario !== "EARTHQUAKE";
   const regions = useMemo(() => flatten(result), [result]);
   const recommendedExit = useMemo(
@@ -270,6 +250,7 @@ export default function ImageOverlay({
           const css = boxToStyle(region.coordinates);
           const labelTop = clamp01(region.coordinates[0]) < 0.12;
           const isActive = activeIndex === i;
+          const showInsideLabel = isLibrary || labelTop;
 
           return (
             <button
@@ -282,13 +263,12 @@ export default function ImageOverlay({
               } transition-shadow focus:outline-none`}
               aria-label={`${style.label}: ${region.label}`}
             >
-              {/* Label chip */}
               <span
-                className={`absolute ${
-                  labelTop ? "top-1 left-1" : "bottom-full left-0 mb-1"
-                } flex max-w-[60vw] items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide shadow-md ${style.chip} ${
-                  isActive ? "whitespace-normal" : "truncate whitespace-nowrap"
-                }`}
+                className={`absolute flex max-w-full items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide shadow-md ${style.chip} ${
+                  showInsideLabel
+                    ? "top-1 left-1 right-1"
+                    : "bottom-full left-0 mb-1 max-w-[60vw]"
+                } ${isActive ? "whitespace-normal" : "truncate whitespace-nowrap"}`}
               >
                 <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${style.dot}`} />
                 <span className="truncate">{region.label}</span>

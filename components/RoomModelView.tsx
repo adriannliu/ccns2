@@ -8,6 +8,8 @@ interface RoomModelViewProps {
   model: RoomModel;
   /** When set, tailors path/labels for the active emergency. */
   scenario?: Scenario;
+  /** Hide hazard landmarks (e.g. saved-rooms library view). */
+  hideHazards?: boolean;
   className?: string;
 }
 
@@ -56,6 +58,7 @@ function pathD(points: Point2D[]): string {
 export default function RoomModelView({
   model,
   scenario,
+  hideHazards = false,
   className = "",
 }: RoomModelViewProps) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
@@ -84,6 +87,10 @@ export default function RoomModelView({
   );
 
   if (!safeModel) return null;
+
+  const landmarks = (hideHazards
+    ? safeModel.landmarks.filter((lm) => lm.type !== "hazard")
+    : safeModel.landmarks) ?? [];
 
   return (
     <div
@@ -121,7 +128,7 @@ export default function RoomModelView({
         <rect width="1" height="1" fill="url(#floor-grid)" />
 
         {/* Walls */}
-        {safeModel.walls.map((wall, i) => {
+        {safeModel.walls?.map((wall, i) => {
           if (!Array.isArray(wall) || wall.length < 2) return null;
           const a = pt(wall[0]);
           const b = pt(wall[1]);
@@ -186,7 +193,7 @@ export default function RoomModelView({
         </text>
 
         {/* Landmarks */}
-        {safeModel.landmarks.map((lm, i) => {
+        {landmarks.map((lm, i) => {
           const pos = pt(lm.position);
           const style = LANDMARK_STYLES[lm.type] ?? LANDMARK_STYLES.furniture;
           const isActive = activeIndex === i;

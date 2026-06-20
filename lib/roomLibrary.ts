@@ -1,12 +1,33 @@
 import type { SavedRoom } from "./types";
+import { roomLabelCount } from "./roomLabels";
+import {
+  deleteRoomPlans,
+  loadRoomPlans,
+  persistRoomPlans,
+} from "./roomPlansStorage";
+import { mergeSavedRooms, normalizeSavedRoom } from "./savedRoom";
 
 const KEY = "safespace:saved-rooms";
+
+/** Attach separately persisted plans when the room list entry is missing them. */
+function attachStoredPlans(room: SavedRoom): SavedRoom {
+  const stored = loadRoomPlans(room.id);
+  const merged = stored ? mergeSavedRooms({ ...room, plans: stored }, room) : room;
+  if (roomLabelCount(merged) > 0) {
+    persistRoomPlans(merged.id, merged.plans);
+  }
+  return merged;
+}
 
 function readLocal(): SavedRoom[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = localStorage.getItem(KEY);
-    return raw ? (JSON.parse(raw) as SavedRoom[]) : [];
+    return raw
+      ? (JSON.parse(raw) as SavedRoom[]).map((room) =>
+          attachStoredPlans(normalizeSavedRoom(room)),
+        )
+      : [];
   } catch {
     return [];
   }
@@ -15,7 +36,9 @@ function readLocal(): SavedRoom[] {
 function writeLocal(rooms: SavedRoom[]): void {
   if (typeof window === "undefined") return;
   try {
-    localStorage.setItem(KEY, JSON.stringify(rooms));
+    // Keep image URLs only in the index — plans live in roomPlansStorage.
+    const slim = rooms.map(({ plans: _plans, ...meta }) => meta);
+    localStorage.setItem(KEY, JSON.stringify(slim));
   } catch {
     // Quota exceeded — keep in-memory only for this session.
   }
@@ -38,9 +61,24 @@ export async function listRooms(): Promise<SavedRoom[]> {
     if (!res.ok) return local.sort((a, b) => b.createdAt - a.createdAt);
     const remote = (await res.json()) as { rooms?: SavedRoom[] };
     const merged = new Map<string, SavedRoom>();
-    for (const r of remote.rooms ?? []) merged.set(r.id, r);
-    for (const r of local) merged.set(r.id, r);
-    const list = [...merged.values()].sort((a, b) => b.createdAt - a.createdAt);
+    for (const r of remote.rooms ?? []) {
+      const normalized = attachStoredPlans(normalizeSavedRoom(r));
+      const existing = merged.get(normalized.id);
+      merged.set(
+        normalized.id,
+        existing ? mergeSavedRooms(existing, normalized) : normalized,
+      );
+    }
+    for (const r of local) {
+      const existing = merged.get(r.id);
+      merged.set(r.id, existing ? mergeSavedRooms(r, existing) : r);
+    }
+    const list = [...merged.values()]
+      .map(attachStoredPlans)
+      .sort((a, b) => b.createdAt - a.createdAt);
+    for (const room of list) {
+      if (roomLabelCount(room) > 0) persistRoomPlans(room.id, room.plans);
+    }
     memoryRooms = list;
     writeLocal(list);
     return list;
@@ -54,8 +92,12 @@ export function getRoomById(id: string): SavedRoom | null {
 }
 
 export function upsertRoomLocal(room: SavedRoom): void {
-  const rooms = allLocal().filter((r) => r.id !== room.id);
-  rooms.unshift(room);
+  const normalized = attachStoredPlans(normalizeSavedRoom(room));
+  if (roomLabelCount(normalized) > 0) {
+    persistRoomPlans(normalized.id, normalized.plans);
+  }
+  const rooms = allLocal().filter((r) => r.id !== normalized.id);
+  rooms.unshift(normalized);
   memoryRooms = rooms;
   writeLocal(rooms);
 }
@@ -63,6 +105,7 @@ export function upsertRoomLocal(room: SavedRoom): void {
 export async function deleteRoom(id: string): Promise<void> {
   memoryRooms = allLocal().filter((r) => r.id !== id);
   writeLocal(memoryRooms);
+  deleteRoomPlans(id);
   try {
     await fetch(`/api/rooms/${id}`, { method: "DELETE" });
   } catch {
@@ -83,6 +126,7 @@ export async function setupRoom(
     throw new Error(body?.error ?? `Setup failed (${res.status})`);
   }
   const room = (await res.json()) as SavedRoom;
-  upsertRoomLocal(room);
-  return room;
+  const normalized = normalizeSavedRoom(room);
+  upsertRoomLocal(normalized);
+  return normalized;
 }

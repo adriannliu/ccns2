@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { butterbase, isButterbaseConfigured } from "@/lib/butterbase";
+import { normalizeSavedRoom } from "@/lib/savedRoom";
 import type { SavedRoom } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -17,19 +18,8 @@ export async function GET() {
     return NextResponse.json({ rooms: [], error: res.error });
   }
 
-  const rooms = (Array.isArray(res.data) ? res.data : []).map(normalizeRecord);
+  const rooms = (Array.isArray(res.data) ? res.data : []).map((raw) =>
+    normalizeSavedRoom(raw as SavedRoom | Record<string, unknown>),
+  );
   return NextResponse.json({ rooms });
-}
-
-function normalizeRecord(raw: SavedRoom | Record<string, unknown>): SavedRoom {
-  const r = raw as SavedRoom;
-  return {
-    id: String(r.id ?? ""),
-    label: String(r.label ?? "Unnamed room"),
-    image: String(r.image ?? ""),
-    panorama: r.panorama ? String(r.panorama) : undefined,
-    scanMode: r.scanMode === "photo" ? "photo" : "video360",
-    plans: r.plans as SavedRoom["plans"],
-    createdAt: Number(r.createdAt ?? Date.now()),
-  };
 }

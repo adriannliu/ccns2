@@ -5,26 +5,11 @@ import {
   type ImageFormat,
 } from "@aws-sdk/client-bedrock-runtime";
 import type { AnalyzeInput } from "@/lib/analyzeInput";
+import { normalizeBBox } from "@/lib/bbox";
 import { normalizeRoomModel } from "@/lib/roomModel";
 import { contentTypeToImageFormat, s3Location } from "@/lib/s3";
-import type { AnalysisResult, Scenario } from "@/lib/types";
-
-const SYSTEM_PROMPT_PHOTO = `You are SafeSpace, a Spatial Emergency Intelligence system. You analyze a single photograph of an indoor space and produce a life-safety plan for a specific emergency scenario: FIRE, EARTHQUAKE, or CODE_RED (active threat / lockdown). The scenario is given in the user's message.
-
-YOUR JOB
-Identify, from what is actually visible in the image:
-1. egress_points  - ways to leave the room (doors and windows).
-2. hazards        - objects/areas that are dangerous in THIS scenario.
-3. safe_zones     - the best places to take cover, shelter, or hide for THIS scenario.
-4. actionable_instructions - a short, ordered survival plan.
-
-OUTPUT FORMAT — raw JSON only. See schema in prior prompts.`;
-
-const SYSTEM_PROMPT_VIDEO360 = `You are SafeSpace. You receive sequential frames from a slow 360° room scan. Build a TOP-DOWN room_model floor plan with walls, landmarks, exit_path, and scan_origin. Also return egress_points, hazards, safe_zones on the FIRST frame.
-
-room_model is REQUIRED. exit_path needs 3+ waypoints. Label doors, windows, desks, hazards, hiding spots.
-
-OUTPUT FORMAT — raw JSON only with keys: egress_points, hazards, safe_zones, actionable_instructions, room_model.`;
+import { SYSTEM_PROMPT_PHOTO, SYSTEM_PROMPT_VIDEO360 } from "@/lib/vlmPrompts";
+import type { AnalysisResult, EgressPoint, Hazard, SafeZone, Scenario } from "@/lib/types";
 
 const SCENARIO_INSTRUCTIONS: Record<Scenario, string> = {
   FIRE: "Scenario: FIRE. Prioritize low, smoke-free egress and avoid flammable hazards.",
@@ -41,7 +26,7 @@ const BEDROCK_MODEL_ID =
 const BEDROCK_FALLBACK_MODEL_ID =
   process.env.BEDROCK_FALLBACK_MODEL_ID ?? "us.amazon.nova-pro-v1:0";
 const TEMPERATURE = 0.1;
-const MAX_TOKENS_PHOTO = 1024;
+const MAX_TOKENS_PHOTO = 2048;
 const MAX_TOKENS_VIDEO = 4096;
 
 export const ALL_SCENARIOS: Scenario[] = ["FIRE", "EARTHQUAKE", "CODE_RED"];
@@ -90,11 +75,50 @@ function toImageBlock(source: AnalyzeInput["sources"][number]): ContentBlock {
   return { image: { format, source: { bytes } } };
 }
 
+function pickArray(raw: Record<string, unknown>, keys: string[]): unknown[] {
+  for (const key of keys) {
+    if (Array.isArray(raw[key])) return raw[key] as unknown[];
+  }
+  return [];
+}
+
 function normalizeResult(raw: Partial<AnalysisResult>): AnalysisResult {
+  const record = raw as Record<string, unknown>;
+  const egressRaw = pickArray(record, ["egress_points", "egressPoints", "exits"]);
+  const safeRaw = pickArray(record, ["safe_zones", "safeZones", "shelter"]);
+  const hazardRaw = pickArray(record, ["hazards", "hazard_points"]);
+
+  const egress_points = egressRaw
+    .map((rawItem) => {
+      const item = rawItem as Partial<EgressPoint>;
+      const coordinates = normalizeBBox(item.coordinates);
+      if (!coordinates) return null;
+      return { ...item, coordinates } as EgressPoint;
+    })
+    .filter((item): item is EgressPoint => item !== null);
+
+  const safe_zones = safeRaw
+    .map((rawItem) => {
+      const item = rawItem as Partial<SafeZone>;
+      const coordinates = normalizeBBox(item.coordinates);
+      if (!coordinates) return null;
+      return { ...item, coordinates } as SafeZone;
+    })
+    .filter((item): item is SafeZone => item !== null);
+
+  const hazards = hazardRaw
+    .map((rawItem) => {
+      const item = rawItem as Partial<Hazard>;
+      const coordinates = normalizeBBox(item.coordinates);
+      if (!coordinates) return null;
+      return { ...item, coordinates } as Hazard;
+    })
+    .filter((item): item is Hazard => item !== null);
+
   return {
-    egress_points: raw.egress_points ?? [],
-    hazards: raw.hazards ?? [],
-    safe_zones: raw.safe_zones ?? [],
+    egress_points,
+    hazards,
+    safe_zones,
     actionable_instructions: raw.actionable_instructions ?? [],
     room_model: normalizeRoomModel(raw.room_model),
   };
