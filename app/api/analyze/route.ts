@@ -17,6 +17,7 @@ import type {
   AnalyzeRequest,
   AnalyzeResponse,
   RoomModel,
+  ScanMode,
   Scenario,
 } from "@/lib/types";
 
@@ -157,9 +158,10 @@ type ImageSource =
   | { kind: "s3"; key: string; contentType?: string }
   | { kind: "inline"; image: string };
 
-type AnalyzeInput =
-  | { mode: "photo"; source: ImageSource }
-  | { mode: "video360"; sources: ImageSource[] };
+type AnalyzeInput = {
+  mode: ScanMode;
+  sources: ImageSource[];
+};
 
 function toImageBlock(source: ImageSource): ContentBlock {
   if (source.kind === "s3") {
@@ -186,19 +188,26 @@ async function callVisionModel(
 
   const client = new BedrockRuntimeClient({ region: AWS_REGION });
   const isVideo = input.mode === "video360";
+  const isMulti = input.sources.length > 1;
+
+  const intro = isVideo
+    ? `${SCENARIO_INSTRUCTIONS[scenario]}\n\nThese ${input.sources.length} frames are sequential slices of a 360° room scan, ordered left-to-right around the room. Synthesize the full room and return the room_model floor plan.`
+    : isMulti
+      ? `${SCENARIO_INSTRUCTIONS[scenario]}\n\nThese ${input.sources.length} photos show the same room from different angles. Combine what you see across all of them; place bounding boxes on the first photo.`
+      : SCENARIO_INSTRUCTIONS[scenario];
 
   const content: ContentBlock[] = [
-    {
-      text: isVideo
-        ? `${SCENARIO_INSTRUCTIONS[scenario]}\n\nThese ${input.sources.length} frames are sequential slices of a 360° room scan, ordered left-to-right around the room. Synthesize the full room and return the room_model floor plan.`
-        : SCENARIO_INSTRUCTIONS[scenario],
-    },
-    ...(isVideo
+    { text: intro },
+    ...(isVideo || isMulti
       ? input.sources.flatMap((src, i) => [
-          { text: `Frame ${i + 1} of ${input.sources.length}:` },
+          {
+            text: isVideo
+              ? `Frame ${i + 1} of ${input.sources.length}:`
+              : `Photo ${i + 1} of ${input.sources.length}:`,
+          },
           toImageBlock(src),
         ])
-      : [toImageBlock(input.source)]),
+      : [toImageBlock(input.sources[0])]),
   ];
 
   const command = new ConverseCommand({
@@ -284,46 +293,75 @@ export async function POST(req: Request) {
   let imageUrl: string | undefined;
   let panoramaUrl: string | undefined;
 
-  if (scanMode === "video360") {
+  function sourcesFromFrames(): ImageSource[] | null {
     if (frameKeys?.length && isS3Configured()) {
-      input = {
-        mode: "video360",
-        sources: frameKeys.map((key) => ({
-          kind: "s3" as const,
-          key,
-          contentType: "image/jpeg",
-        })),
-      };
-      imageUrl = await createDownloadUrl(frameKeys[0]).catch(() => undefined);
-    } else if (frames?.length) {
-      input = {
-        mode: "video360",
-        sources: frames.map((f) => ({ kind: "inline" as const, image: f })),
-      };
-      panoramaUrl = frames.length > 1 ? undefined : frames[0];
-    } else {
+      return frameKeys.map((key) => ({
+        kind: "s3" as const,
+        key,
+        contentType: "image/jpeg",
+      }));
+    }
+    if (frames?.length) {
+      return frames.map((f) => ({ kind: "inline" as const, image: f }));
+    }
+    return null;
+  }
+
+  if (scanMode === "video360") {
+    const sources = sourcesFromFrames();
+    if (!sources?.length) {
       return NextResponse.json(
         { error: "Provide `frames` or `frameKeys` for a 360° video scan." },
         { status: 400 },
       );
     }
-  } else if (imageKey && isS3Configured()) {
-    input = { mode: "photo", source: { kind: "s3", key: imageKey, contentType: imageContentType } };
-  } else if (image && typeof image === "string") {
-    input = { mode: "photo", source: { kind: "inline", image } };
+    input = { mode: "video360", sources };
+    if (frameKeys?.length && isS3Configured()) {
+      imageUrl = await createDownloadUrl(frameKeys[0]).catch(() => undefined);
+    }
   } else {
-    return NextResponse.json(
-      { error: "Provide an `imageKey` (S3) or inline base64 `image`." },
-      { status: 400 },
-    );
+    const fromFrames = sourcesFromFrames();
+    if (fromFrames?.length) {
+      input = { mode: "photo", sources: fromFrames };
+      if (frameKeys?.length && isS3Configured()) {
+        imageUrl = await createDownloadUrl(frameKeys[0]).catch(() => undefined);
+      }
+    } else if (imageKey && isS3Configured()) {
+      input = {
+        mode: "photo",
+        sources: [
+          { kind: "s3", key: imageKey, contentType: imageContentType },
+        ],
+      };
+    } else if (image && typeof image === "string") {
+      input = { mode: "photo", sources: [{ kind: "inline", image }] };
+    } else {
+      return NextResponse.json(
+        {
+          error:
+            "Provide `image`/`imageKey`, or `frames`/`frameKeys` for photos.",
+        },
+        { status: 400 },
+      );
+    }
   }
 
   try {
     const result = await callVisionModel(input, scenario);
     const saved = await saveScanToButterbase({ scenario, result });
 
-    if (input.mode === "photo" && input.source.kind === "s3" && isS3Configured()) {
-      imageUrl = await createDownloadUrl(input.source.key).catch(() => undefined);
+    if (
+      !imageUrl &&
+      input.sources[0]?.kind === "s3" &&
+      isS3Configured()
+    ) {
+      imageUrl = await createDownloadUrl(input.sources[0].key).catch(
+        () => undefined,
+      );
+    }
+
+    if (input.mode === "video360" && input.sources.length > 1) {
+      panoramaUrl = undefined;
     }
 
     const response: AnalyzeResponse = {
