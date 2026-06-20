@@ -21,7 +21,7 @@ export const SAFETY_PLAN_TOOL_NAME = "emit_safety_plan";
 const BBOX = {
   type: "array",
   description:
-    "Bounding box [ymin, xmin, ymax, xmax]. Each value is a fraction of the image between 0.0 (top/left) and 1.0 (bottom/right). ymin < ymax and xmin < xmax.",
+    "Tight bounding box [ymin, xmin, ymax, xmax] around the physical object (door, glass pane, desk top, shelf) — not open floor or empty space beneath furniture. Each value 0.0 (top/left) to 1.0 (bottom/right). ymin < ymax and xmin < xmax.",
   items: { type: "number" },
   minItems: 4,
   maxItems: 4,
@@ -41,18 +41,23 @@ const SAFETY_PLAN_SCHEMA = {
   properties: {
     egress_points: {
       type: "array",
-      description: "Ways out of the room (doors and windows) visible in the image.",
+      description:
+        "Visible doors and windows only. Windows require clear evidence (glass + frame/sill/daylight) — not mirrors or screens. Omit uncertain openings. Doors-only is OK.",
       items: {
         type: "object",
         properties: {
           type: {
             type: "string",
             enum: ["Primary Door", "Secondary Door", "Window"],
+            description:
+              "Window only when glass pane + frame/sill/blinds or outdoor view is visible. One Primary Door.",
           },
           coordinates: BBOX,
           accessibility_status: {
             type: "string",
             enum: ["Clear", "Partially Blocked", "Blocked"],
+            description:
+              "Clear = unobstructed; Partially Blocked = clutter near opening; Blocked = not passable.",
           },
         },
         required: ["type", "coordinates", "accessibility_status"],
@@ -60,12 +65,19 @@ const SAFETY_PLAN_SCHEMA = {
     },
     hazards: {
       type: "array",
-      description: "Objects/areas dangerous in THIS scenario.",
+      description:
+        "Visible objects dangerous in THIS scenario. Reason must cite the scenario mechanism.",
       items: {
         type: "object",
         properties: {
-          description: { type: "string" },
-          reason: { type: "string" },
+          description: {
+            type: "string",
+            description: "Specific visible object (e.g. tall unsecured bookshelf).",
+          },
+          reason: {
+            type: "string",
+            description: "Why it is hazardous in this scenario.",
+          },
           coordinates: BBOX,
         },
         required: ["description", "reason", "coordinates"],
@@ -73,7 +85,8 @@ const SAFETY_PLAN_SCHEMA = {
     },
     safe_zones: {
       type: "array",
-      description: "Best places to take cover, shelter, or hide for THIS scenario.",
+      description:
+        "Legitimate cover or concealment only. Empty array if none qualify. NEVER open floor or under open-sided desks. Hiding Spot = true concealment (closet, stall, behind solid partition). Drop & Cover = sturdy fixed desk/table top.",
       items: {
         type: "object",
         properties: {
@@ -81,10 +94,15 @@ const SAFETY_PLAN_SCHEMA = {
             type: "string",
             enum: ["Hiding Spot", "Cover", "Drop & Cover"],
           },
-          description: { type: "string" },
+          description: {
+            type: "string",
+            description:
+              "Name the physical object providing cover/concealment and why it helps this scenario.",
+          },
           effectiveness_rating: {
             type: "string",
             enum: ["High", "Medium", "Low"],
+            description: "High = solid fixed mass or enclosed concealment.",
           },
           coordinates: BBOX,
         },

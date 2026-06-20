@@ -40,8 +40,8 @@ Defined once in `lib/bedrockTool.ts` and shared by every analysis path. We expos
 Even with tool-use, model output is treated as untrusted and passed through `normalizeResult` (`lib/spatialAnalysis.ts`) before reaching the UI:
 
 * `actionable_instructions` → always coerced to `string[]` (a prose string is split into steps).
-* `egress_points` / `hazards` / `safe_zones` → only objects with a **valid bounding box** are kept; malformed string entries are dropped.
-* **Coordinates** are sanitized: `0–100` percentage values are rescaled to `0–1`, values are clamped to `[0, 1]`, and inverted min/max pairs are swapped.
+* `egress_points` / `hazards` / `safe_zones` → keys are matched tolerantly (`pickArray` accepts `egressPoints`/`exits`, etc.) and each item's `coordinates` is run through `normalizeBBox` (`lib/bbox.ts`); items without a valid box are dropped.
+* **Coordinates** (`lib/bbox.ts`) accept either a 4-number array or an object form (`{ymin,xmin,ymax,xmax}` / `{top,left,...}` / `{y1,x1,...}`) and resolve to `[ymin, xmin, ymax, xmax]`.
 * `room_model` → coerced via `normalizeRoomModel` (`lib/roomModel.ts`), tolerating assorted point/wall encodings.
 
 This guarantees the frontend overlay and the saved room plans always receive the full, well-typed shape, regardless of which model answered.
@@ -105,7 +105,9 @@ interface AgentOutput {
 | Concern | Module |
 |---|---|
 | Tool schema + forced tool-use config + tool-output extractor | `lib/bedrockTool.ts` |
-| Model invocation, fallback chain, prompts, normalization, mocks | `lib/spatialAnalysis.ts` |
+| Model invocation, fallback chain, normalization, mocks | `lib/spatialAnalysis.ts` |
+| System prompts (photo / 360° video) | `lib/vlmPrompts.ts` |
+| Bounding-box coercion | `lib/bbox.ts` |
 | Capture payload → model input + display-image URL | `lib/analyzeInput.ts` |
 | `room_model` coercion | `lib/roomModel.ts` |
 | Single-scenario endpoint | `app/api/analyze/route.ts` (thin wrapper over the libs) |

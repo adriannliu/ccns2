@@ -13,11 +13,12 @@ import { SYSTEM_PROMPT_PHOTO, SYSTEM_PROMPT_VIDEO360 } from "@/lib/vlmPrompts";
 import type { AnalysisResult, EgressPoint, Hazard, SafeZone, Scenario } from "@/lib/types";
 
 const SCENARIO_INSTRUCTIONS: Record<Scenario, string> = {
-  FIRE: "Scenario: FIRE. Prioritize low, smoke-free egress and avoid flammable hazards.",
+  FIRE:
+    "Scenario: FIRE. Label only clearly visible doors/windows. Mark sturdy cover, not open floor. Flag flammable items and glass.",
   EARTHQUAKE:
-    "Scenario: EARTHQUAKE. Prioritize sturdy cover (safe zones) and flag falling hazards.",
+    "Scenario: EARTHQUAKE. Drop & Cover under sturdy fixed desks/tables only — box the furniture, not space underneath. Flag falling/shattering hazards.",
   CODE_RED:
-    "Scenario: CODE_RED. Prioritize concealment/hiding spots and lockable barriers; avoid line-of-sight to doors/windows.",
+    "Scenario: CODE_RED. Hiding Spot only for true concealment (closet, stall, behind solid partition) — NOT under open-sided desks or open floor. Omit if none qualify.",
 };
 
 const AWS_REGION = process.env.AWS_REGION ?? "us-east-1";
