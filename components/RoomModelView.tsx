@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { normalizeRoomModel } from "@/lib/roomModel";
 import type { LandmarkType, Point2D, RoomModel, Scenario } from "@/lib/types";
 
 interface RoomModelViewProps {
@@ -59,13 +60,15 @@ export default function RoomModelView({
 }: RoomModelViewProps) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
 
+  const safeModel = useMemo(() => normalizeRoomModel(model), [model]);
+
   const showExitPath =
     !scenario || scenario === "FIRE" || scenario === "CODE_RED";
 
   const exitPath = useMemo(() => {
-    if (!showExitPath) return [];
-    return model.exit_path.filter((p) => p.length === 2);
-  }, [model.exit_path, showExitPath]);
+    if (!safeModel || !showExitPath) return [];
+    return safeModel.exit_path.filter((p) => p.length === 2);
+  }, [safeModel, showExitPath]);
 
   const subtitle =
     scenario === "FIRE"
@@ -75,7 +78,12 @@ export default function RoomModelView({
         : scenario === "CODE_RED"
           ? "Move to concealment along the dotted path."
           : "Stitched from your 360° scan — follow the dotted line to the exit.";
-  const origin = useMemo(() => pt(model.scan_origin), [model.scan_origin]);
+  const origin = useMemo(
+    () => (safeModel ? pt(safeModel.scan_origin) : { x: 0.5, y: 0.82 }),
+    [safeModel],
+  );
+
+  if (!safeModel) return null;
 
   return (
     <div
@@ -113,9 +121,10 @@ export default function RoomModelView({
         <rect width="1" height="1" fill="url(#floor-grid)" />
 
         {/* Walls */}
-        {model.walls.map((wall, i) => {
-          if (wall.length < 2) return null;
-          const [a, b] = wall.map(pt);
+        {safeModel.walls.map((wall, i) => {
+          if (!Array.isArray(wall) || wall.length < 2) return null;
+          const a = pt(wall[0]);
+          const b = pt(wall[1]);
           return (
             <line
               key={`wall-${i}`}
@@ -177,7 +186,7 @@ export default function RoomModelView({
         </text>
 
         {/* Landmarks */}
-        {model.landmarks.map((lm, i) => {
+        {safeModel.landmarks.map((lm, i) => {
           const pos = pt(lm.position);
           const style = LANDMARK_STYLES[lm.type] ?? LANDMARK_STYLES.furniture;
           const isActive = activeIndex === i;

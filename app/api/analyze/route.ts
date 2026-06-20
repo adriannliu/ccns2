@@ -6,6 +6,7 @@ import {
   type ImageFormat,
 } from "@aws-sdk/client-bedrock-runtime";
 import { butterbase } from "@/lib/butterbase";
+import { normalizeRoomModel } from "@/lib/roomModel";
 import {
   contentTypeToImageFormat,
   createDownloadUrl,
@@ -230,16 +231,6 @@ async function invokeModel(
   }
 
   return normalizeResult(extractJson(text) as Partial<AnalysisResult>);
-}
-
-function normalizeRoomModel(raw: Partial<RoomModel> | undefined): RoomModel | undefined {
-  if (!raw) return undefined;
-  return {
-    walls: raw.walls ?? [],
-    landmarks: raw.landmarks ?? [],
-    exit_path: raw.exit_path ?? [],
-    scan_origin: raw.scan_origin ?? [0.5, 0.82],
-  };
 }
 
 /**

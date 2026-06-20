@@ -5,8 +5,9 @@ import {
   type ImageFormat,
 } from "@aws-sdk/client-bedrock-runtime";
 import type { AnalyzeInput } from "@/lib/analyzeInput";
+import { normalizeRoomModel } from "@/lib/roomModel";
 import { contentTypeToImageFormat, s3Location } from "@/lib/s3";
-import type { AnalysisResult, RoomModel, Scenario } from "@/lib/types";
+import type { AnalysisResult, Scenario } from "@/lib/types";
 
 const SYSTEM_PROMPT_PHOTO = `You are SafeSpace, a Spatial Emergency Intelligence system. You analyze a single photograph of an indoor space and produce a life-safety plan for a specific emergency scenario: FIRE, EARTHQUAKE, or CODE_RED (active threat / lockdown). The scenario is given in the user's message.
 
@@ -87,16 +88,6 @@ function toImageBlock(source: AnalyzeInput["sources"][number]): ContentBlock {
   }
   const { bytes, format } = parseImage(source.image);
   return { image: { format, source: { bytes } } };
-}
-
-function normalizeRoomModel(raw: Partial<RoomModel> | undefined): RoomModel | undefined {
-  if (!raw) return undefined;
-  return {
-    walls: raw.walls ?? [],
-    landmarks: raw.landmarks ?? [],
-    exit_path: raw.exit_path ?? [],
-    scan_origin: raw.scan_origin ?? [0.5, 0.82],
-  };
 }
 
 function normalizeResult(raw: Partial<AnalysisResult>): AnalysisResult {
