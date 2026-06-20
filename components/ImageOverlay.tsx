@@ -66,11 +66,29 @@ const EGRESS_TYPE_RANK: Record<EgressType, number> = {
 
 /** Clamp a number into the [0, 1] range. */
 function clamp01(n: number): number {
-  if (Number.isNaN(n)) return 0;
+  if (typeof n !== "number" || Number.isNaN(n)) return 0;
   return Math.min(1, Math.max(0, n));
 }
 
-function bboxCenter([ymin, xmin, ymax, xmax]: BBox): { x: number; y: number } {
+/**
+ * Coerce whatever the VLM returned into a valid [ymin, xmin, ymax, xmax] tuple.
+ * The model occasionally emits malformed coordinates (missing, wrong length,
+ * or non-array), which previously crashed destructuring with "param is not
+ * iterable". Returns null when the box can't be salvaged.
+ */
+function normalizeBBox(coordinates: unknown): BBox | null {
+  if (!Array.isArray(coordinates) || coordinates.length < 4) return null;
+  const nums = coordinates
+    .slice(0, 4)
+    .map((v) => (typeof v === "number" ? v : Number(v)));
+  if (nums.some((n) => Number.isNaN(n))) return null;
+  return nums as BBox;
+}
+
+function bboxCenter(coordinates: BBox): { x: number; y: number } {
+  const box = normalizeBBox(coordinates);
+  if (!box) return { x: 0.5, y: 0.5 };
+  const [ymin, xmin, ymax, xmax] = box;
   return {
     x: (clamp01(xmin) + clamp01(xmax)) / 2,
     y: (clamp01(ymin) + clamp01(ymax)) / 2,
@@ -86,10 +104,11 @@ function dist(
 
 /** Pick the best egress: prefer clear primary doors, then nearest by distance. */
 function pickRecommendedEgress(egress: EgressPoint[]): EgressPoint | null {
-  if (egress.length === 0) return null;
+  const valid = egress.filter((e) => normalizeBBox(e.coordinates) !== null);
+  if (valid.length === 0) return null;
 
-  const reachable = egress.filter((e) => e.accessibility_status !== "Blocked");
-  const candidates = reachable.length > 0 ? reachable : egress;
+  const reachable = valid.filter((e) => e.accessibility_status !== "Blocked");
+  const candidates = reachable.length > 0 ? reachable : valid;
 
   return [...candidates].sort((a, b) => {
     const byAccess =
@@ -115,7 +134,9 @@ function pickRecommendedEgress(egress: EgressPoint[]): EgressPoint | null {
  * exactly to the rendered image (see render below), these percentages map
  * 1:1 onto the visible pixels regardless of the device viewport.
  */
-function boxToStyle([ymin, xmin, ymax, xmax]: BBox): React.CSSProperties {
+function boxToStyle(coordinates: BBox): React.CSSProperties {
+  const box = normalizeBBox(coordinates) ?? [0, 0, 0, 0];
+  const [ymin, xmin, ymax, xmax] = box;
   const top = clamp01(Math.min(ymin, ymax));
   const left = clamp01(Math.min(xmin, xmax));
   const bottom = clamp01(Math.max(ymin, ymax));
@@ -149,7 +170,7 @@ function flatten(result: AnalysisResult): OverlayRegion[] {
       label: r.description,
       detail: r.reason,
     })),
-  ];
+  ].filter((region) => normalizeBBox(region.coordinates) !== null);
 }
 
 export default function ImageOverlay({
