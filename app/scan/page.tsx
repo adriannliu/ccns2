@@ -17,7 +17,10 @@ import {
 import type { SavedRoom, ScanMode } from "@/lib/types";
 import { listRooms, setupRoom } from "@/lib/roomLibrary";
 import { isDuplicateRoomLabel } from "@/lib/roomLabel";
-import { extractVideoPreview, extractVideoScan } from "@/lib/videoFrames";
+import {
+  extractVideoScan,
+  reorderFramesPrimary,
+} from "@/lib/videoFrames";
 
 type CaptureTab = ScanMode;
 
@@ -43,8 +46,10 @@ export default function ScanPage() {
   const [existingRooms, setExistingRooms] = useState<SavedRoom[]>([]);
   const [captureTab, setCaptureTab] = useState<CaptureTab>("video360");
   const [photos, setPhotos] = useState<PhotoItem[]>([]);
-  const [videoPreview, setVideoPreview] = useState<string | null>(null);
-  const [videoFile, setVideoFile] = useState<File | null>(null);
+  const [videoFrames, setVideoFrames] = useState<string[]>([]);
+  const [videoPanorama, setVideoPanorama] = useState<string | null>(null);
+  const [selectedFrameIndex, setSelectedFrameIndex] = useState(0);
+  const [videoExtracting, setVideoExtracting] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -54,7 +59,7 @@ export default function ScanPage() {
   }, []);
 
   const isPhoto = captureTab === "photo";
-  const hasCapture = isPhoto ? photos.length > 0 : Boolean(videoPreview);
+  const hasCapture = isPhoto ? photos.length > 0 : videoFrames.length > 0;
   const trimmedLabel = roomLabel.trim();
   const labelTaken = trimmedLabel
     ? isDuplicateRoomLabel(trimmedLabel, existingRooms)
@@ -62,8 +67,10 @@ export default function ScanPage() {
 
   function clearCapture() {
     setPhotos([]);
-    setVideoPreview(null);
-    setVideoFile(null);
+    setVideoFrames([]);
+    setVideoPanorama(null);
+    setSelectedFrameIndex(0);
+    setVideoExtracting(false);
     setError(null);
   }
 
@@ -99,12 +106,18 @@ export default function ScanPage() {
       return;
     }
     setError(null);
+    setVideoExtracting(true);
+    setVideoFrames([]);
+    setVideoPanorama(null);
+    setSelectedFrameIndex(0);
     try {
-      const frame = await extractVideoPreview(next);
-      setVideoPreview(frame);
-      setVideoFile(next);
+      const scan = await extractVideoScan(next);
+      setVideoFrames(scan.frames);
+      setVideoPanorama(scan.panorama);
     } catch {
       setError("Could not read that video. Try another recording.");
+    } finally {
+      setVideoExtracting(false);
     }
   }
 
@@ -234,14 +247,17 @@ export default function ScanPage() {
           });
         }
       } else {
-        const scan = await extractVideoScan(videoFile!);
-        const frameKeys = await uploadDataUrlsToS3(scan.frames);
+        const orderedFrames = reorderFramesPrimary(
+          videoFrames,
+          selectedFrameIndex,
+        );
+        const frameKeys = await uploadDataUrlsToS3(orderedFrames);
         await setupRoom({
           label: roomLabel.trim(),
           scanMode: "video360",
-          previewImage: videoPreview ?? scan.frames[0],
-          panorama: scan.panorama,
-          ...(frameKeys ? { frameKeys } : { frames: scan.frames }),
+          previewImage: orderedFrames[0],
+          panorama: videoPanorama ?? undefined,
+          ...(frameKeys ? { frameKeys } : { frames: orderedFrames }),
         });
       }
       router.push("/rooms");
@@ -452,6 +468,11 @@ export default function ScanPage() {
               </p>
             ) : null}
           </div>
+        ) : videoExtracting ? (
+          <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-slate-800 bg-slate-900/40 py-14 text-slate-400">
+            <Loader2 className="h-8 w-8 animate-spin text-emerald-400" />
+            <p className="text-sm font-medium">Extracting frames from video…</p>
+          </div>
         ) : (
           <div className="space-y-3">
             <div
@@ -467,8 +488,8 @@ export default function ScanPage() {
             >
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src={videoPreview!}
-                alt="Room preview"
+                src={videoFrames[selectedFrameIndex]}
+                alt={`Room frame ${selectedFrameIndex + 1}`}
                 className="max-h-[55vh] w-full object-contain"
               />
               {dragOver ? (
@@ -479,6 +500,42 @@ export default function ScanPage() {
                 </div>
               ) : null}
             </div>
+
+            {videoFrames.length > 1 ? (
+              <div>
+                <p className="mb-2 text-xs text-slate-500">
+                  Tap a frame to label — exits and shelter spots will be drawn on
+                  the selected view, like a single photo.
+                </p>
+                <div className="grid grid-cols-5 gap-1.5">
+                  {videoFrames.map((frame, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => setSelectedFrameIndex(i)}
+                      aria-label={`Use frame ${i + 1} for labels`}
+                      aria-pressed={selectedFrameIndex === i}
+                      className={`relative aspect-[4/3] overflow-hidden rounded-lg border-2 transition ${
+                        selectedFrameIndex === i
+                          ? "border-emerald-400 ring-2 ring-emerald-500/40"
+                          : "border-slate-800 opacity-80 hover:opacity-100"
+                      }`}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={frame}
+                        alt=""
+                        className="h-full w-full object-cover"
+                      />
+                      <span className="absolute bottom-0.5 right-0.5 rounded bg-slate-950/80 px-1 text-[10px] font-semibold text-slate-300">
+                        {i + 1}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
             <button
               onClick={() => openFilePicker(true)}
               className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-800 bg-slate-900/60 py-3 text-sm font-medium text-slate-300 transition hover:text-white"
@@ -499,7 +556,13 @@ export default function ScanPage() {
       <div className="fixed inset-x-0 bottom-20 mx-auto w-full max-w-md border-t border-slate-800 bg-slate-950/90 px-5 py-4 backdrop-blur">
         <button
           onClick={runSetup}
-          disabled={!hasCapture || !trimmedLabel || labelTaken || loading}
+          disabled={
+            !hasCapture ||
+            !trimmedLabel ||
+            labelTaken ||
+            loading ||
+            videoExtracting
+          }
           className="flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-500 py-4 text-base font-bold text-slate-950 shadow-neon transition active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400 disabled:shadow-none"
         >
           {loading ? (
