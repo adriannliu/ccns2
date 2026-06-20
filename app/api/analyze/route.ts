@@ -117,6 +117,12 @@ const BEDROCK_MODEL_ID =
   process.env.BEDROCK_MODEL_ID ??
   "us.anthropic.claude-sonnet-4-5-20250929-v1:0";
 
+// Non-Anthropic fallback so we are not bottlenecked on Anthropic Bedrock
+// use-case approval (or throttling). Amazon Nova Pro is vision-capable and
+// speaks the same Converse API, so no extra SDK or code path is needed.
+// Set to "" to disable the fallback entirely.
+const BEDROCK_FALLBACK_MODEL_ID =
+  process.env.BEDROCK_FALLBACK_MODEL_ID ?? "us.amazon.nova-pro-v1:0";
 const TEMPERATURE = 0.1;
 const MAX_TOKENS_PHOTO = 1024;
 const MAX_TOKENS_VIDEO = 4096;
@@ -176,17 +182,13 @@ function toImageBlock(source: ImageSource): ContentBlock {
   return { image: { format, source: { bytes } } };
 }
 
-async function callVisionModel(
+/** Invoke a single Bedrock model via the Converse API and parse its JSON. */
+async function invokeModel(
+  client: BedrockRuntimeClient,
+  modelId: string,
   input: AnalyzeInput,
   scenario: Scenario,
 ): Promise<AnalysisResult> {
-  if (!hasAwsCredentials()) {
-    return input.mode === "video360"
-      ? mockVideoAnalysis(scenario)
-      : mockAnalysis(scenario);
-  }
-
-  const client = new BedrockRuntimeClient({ region: AWS_REGION });
   const isVideo = input.mode === "video360";
   const isMulti = input.sources.length > 1;
 
@@ -195,6 +197,7 @@ async function callVisionModel(
     : isMulti
       ? `${SCENARIO_INSTRUCTIONS[scenario]}\n\nThese ${input.sources.length} photos show the same room from different angles. Combine what you see across all of them; place bounding boxes on the first photo.`
       : SCENARIO_INSTRUCTIONS[scenario];
+
 
   const content: ContentBlock[] = [
     { text: intro },
@@ -211,7 +214,7 @@ async function callVisionModel(
   ];
 
   const command = new ConverseCommand({
-    modelId: BEDROCK_MODEL_ID,
+    modelId,
     system: [{ text: isVideo ? SYSTEM_PROMPT_VIDEO360 : SYSTEM_PROMPT_PHOTO }],
     messages: [{ role: "user", content }],
     inferenceConfig: {
@@ -239,6 +242,60 @@ function normalizeRoomModel(raw: Partial<RoomModel> | undefined): RoomModel | un
   };
 }
 
+/**
+ * Run the spatial analysis, preferring the primary (Anthropic) model and
+ * falling back to a non-Anthropic vision model if it fails for any reason
+ * (e.g. access not yet approved, throttling, transient errors). Returns the
+ * result plus the id of the model that actually produced it.
+ */
+async function callVisionModel(
+  input: AnalyzeInput,
+  scenario: Scenario,
+): Promise<{ result: AnalysisResult; model: string }> {
+  // No AWS creds -> deterministic mock so the flow is demoable offline.
+  if (!hasAwsCredentials()) {
+    return {
+      result:
+        input.mode === "video360"
+          ? mockVideoAnalysis(scenario)
+          : mockAnalysis(scenario),
+      model: "mock",
+    };
+  }
+
+  const client = new BedrockRuntimeClient({ region: AWS_REGION });
+
+  const candidates = [BEDROCK_MODEL_ID];
+  if (
+    BEDROCK_FALLBACK_MODEL_ID &&
+    BEDROCK_FALLBACK_MODEL_ID !== BEDROCK_MODEL_ID
+  ) {
+    candidates.push(BEDROCK_FALLBACK_MODEL_ID);
+  }
+
+  let lastErr: unknown;
+  for (let i = 0; i < candidates.length; i++) {
+    const modelId = candidates[i];
+    try {
+      const result = await invokeModel(client, modelId, input, scenario);
+      return { result, model: modelId };
+    } catch (err) {
+      lastErr = err;
+      const hasFallbackLeft = i < candidates.length - 1;
+      console.warn(
+        `[analyze] vision model "${modelId}" failed (${
+          err instanceof Error ? err.message : String(err)
+        }); ${hasFallbackLeft ? "trying fallback model" : "no fallback left"}.`,
+      );
+    }
+  }
+
+  throw lastErr instanceof Error
+    ? lastErr
+    : new Error("All vision models failed.");
+}
+
+/** Defensive normalization so the frontend always gets the full shape. */
 function normalizeResult(raw: Partial<AnalysisResult>): AnalysisResult {
   return {
     egress_points: raw.egress_points ?? [],
@@ -347,7 +404,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    const result = await callVisionModel(input, scenario);
+    const { result, model } = await callVisionModel(input, scenario);
     const saved = await saveScanToButterbase({ scenario, result });
 
     if (
@@ -371,6 +428,7 @@ export async function POST(req: Request) {
       imageUrl,
       panoramaUrl,
       saved,
+      model,
     };
     return NextResponse.json(response);
   } catch (err) {

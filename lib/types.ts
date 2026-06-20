@@ -114,6 +114,11 @@ export interface AnalyzeResponse extends AnalysisResult {
   imageUrl?: string;
   /** Stitched panorama data URL or presigned URL for 360° scans. */
   panoramaUrl?: string;
+  /**
+   * Id of the vision model that produced this result (e.g. the primary
+   * Anthropic model, the non-Anthropic fallback, or "mock" offline).
+   */
+  model?: string;
   /** Result of persisting the scan to Butterbase. */
   saved: {
     success: boolean;

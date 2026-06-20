@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import {
+  DeleteObjectCommand,
   GetObjectCommand,
   PutObjectCommand,
   S3Client,
@@ -99,4 +100,40 @@ export function s3Location(key: string): {
     uri: `s3://${BUCKET}/${key}`,
     bucketOwner: ACCOUNT_ID || undefined,
   };
+}
+
+/**
+ * Live PUT -> GET -> DELETE round-trip against the bucket to verify the app's
+ * credentials can actually read and write objects. Returns ok/error for /api/health.
+ */
+export async function s3RoundTrip(): Promise<{ ok: boolean; error?: string }> {
+  if (!isS3Configured()) return { ok: false, error: "S3_BUCKET is not set." };
+
+  const key = `${PREFIX}/_healthcheck/${randomUUID()}.txt`;
+  const c = client();
+  try {
+    await c.send(
+      new PutObjectCommand({
+        Bucket: BUCKET,
+        Key: key,
+        Body: "ok",
+        ContentType: "text/plain",
+      }),
+    );
+    const got = await c.send(
+      new GetObjectCommand({ Bucket: BUCKET, Key: key }),
+    );
+    const body = await got.Body?.transformToString();
+    if (body !== "ok") {
+      return { ok: false, error: "Read-back mismatch." };
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "S3 error" };
+  } finally {
+    // Best-effort cleanup; ignore failures.
+    await c
+      .send(new DeleteObjectCommand({ Bucket: BUCKET, Key: key }))
+      .catch(() => undefined);
+  }
 }
