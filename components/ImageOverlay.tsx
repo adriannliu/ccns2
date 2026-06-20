@@ -75,15 +75,25 @@ function boxToStyle([ymin, xmin, ymax, xmax]: BBox): React.CSSProperties {
 }
 
 function flatten(result: AnalysisResult): OverlayRegion[] {
-  const tag = (
-    regions: AnalysisResult["egress_points"] | undefined,
-    kind: RegionKind,
-  ): OverlayRegion[] => (regions ?? []).map((r) => ({ ...r, kind }));
-
   return [
-    ...tag(result.egress_points, "egress"),
-    ...tag(result.safe_zones, "safe_zone"),
-    ...tag(result.hazards, "hazard"),
+    ...(result.egress_points ?? []).map<OverlayRegion>((r) => ({
+      kind: "egress",
+      coordinates: r.coordinates,
+      label: r.type,
+      detail: r.accessibility_status,
+    })),
+    ...(result.safe_zones ?? []).map<OverlayRegion>((r) => ({
+      kind: "safe_zone",
+      coordinates: r.coordinates,
+      label: r.type,
+      detail: r.effectiveness_rating,
+    })),
+    ...(result.hazards ?? []).map<OverlayRegion>((r) => ({
+      kind: "hazard",
+      coordinates: r.coordinates,
+      label: r.description,
+      detail: r.reason,
+    })),
   ];
 }
 
@@ -128,19 +138,21 @@ export default function ImageOverlay({
               className={`absolute rounded-md border-2 ${style.box} ${
                 isActive ? "z-20 ring-2 ring-white/70" : "z-10"
               } transition-shadow focus:outline-none`}
-              aria-label={`${style.label}: ${region.type}`}
+              aria-label={`${style.label}: ${region.label}`}
             >
               {/* Label chip */}
               <span
                 className={`absolute ${
                   labelTop ? "top-1 left-1" : "bottom-full left-0 mb-1"
-                } flex max-w-[60vw] items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide shadow-md ${style.chip}`}
+                } flex max-w-[60vw] items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide shadow-md ${style.chip} ${
+                  isActive ? "whitespace-normal" : "truncate whitespace-nowrap"
+                }`}
               >
-                <span className={`h-1.5 w-1.5 rounded-full ${style.dot}`} />
-                {region.type}
-                {region.status ? (
+                <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${style.dot}`} />
+                <span className="truncate">{region.label}</span>
+                {region.detail ? (
                   <span className="font-normal opacity-80">
-                    · {region.status}
+                    · {region.detail}
                   </span>
                 ) : null}
               </span>

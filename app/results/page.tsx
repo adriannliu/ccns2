@@ -15,6 +15,7 @@ import {
 import ImageOverlay from "@/components/ImageOverlay";
 import { getScenario } from "@/lib/scenarios";
 import { loadScan, type StoredScan } from "@/lib/scanStore";
+import type { AccessibilityStatus, EffectivenessRating } from "@/lib/types";
 
 export default function ResultsPage() {
   const router = useRouter();
@@ -119,6 +120,71 @@ export default function ResultsPage() {
         />
       </section>
 
+      {/* Detected regions */}
+      <section className="mb-6 space-y-4">
+        {result.egress_points.length > 0 ? (
+          <div>
+            <h2 className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-blue-400">
+              <DoorOpen className="h-4 w-4" /> Exits
+            </h2>
+            <ul className="space-y-2">
+              {result.egress_points.map((e, i) => (
+                <li
+                  key={i}
+                  className="flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-900/50 px-4 py-3 text-sm"
+                >
+                  <span className="font-medium text-slate-200">{e.type}</span>
+                  <StatusBadge status={e.accessibility_status} />
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+
+        {result.safe_zones.length > 0 ? (
+          <div>
+            <h2 className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-emerald-400">
+              <ShieldCheck className="h-4 w-4" /> Safe zones
+            </h2>
+            <ul className="space-y-2">
+              {result.safe_zones.map((s, i) => (
+                <li
+                  key={i}
+                  className="rounded-xl border border-slate-800 bg-slate-900/50 px-4 py-3 text-sm"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="font-medium text-slate-200">{s.type}</span>
+                    <RatingBadge rating={s.effectiveness_rating} />
+                  </div>
+                  <p className="mt-1 text-xs text-slate-400">{s.description}</p>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+
+        {result.hazards.length > 0 ? (
+          <div>
+            <h2 className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-red-400">
+              <TriangleAlert className="h-4 w-4" /> Hazards
+            </h2>
+            <ul className="space-y-2">
+              {result.hazards.map((h, i) => (
+                <li
+                  key={i}
+                  className="rounded-xl border border-slate-800 bg-slate-900/50 px-4 py-3 text-sm"
+                >
+                  <span className="font-medium text-slate-200">
+                    {h.description}
+                  </span>
+                  <p className="mt-1 text-xs text-slate-400">{h.reason}</p>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </section>
+
       {/* Instructions */}
       <section className="mb-8">
         <h2 className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-slate-500">
@@ -152,6 +218,36 @@ export default function ResultsPage() {
         Scan another space
       </Link>
     </main>
+  );
+}
+
+function StatusBadge({ status }: { status: AccessibilityStatus }) {
+  const styles: Record<AccessibilityStatus, string> = {
+    Clear: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
+    "Partially Blocked": "border-amber-500/30 bg-amber-500/10 text-amber-300",
+    Blocked: "border-red-500/30 bg-red-500/10 text-red-300",
+  };
+  return (
+    <span
+      className={`shrink-0 rounded-full border px-2.5 py-0.5 text-xs font-medium ${styles[status]}`}
+    >
+      {status}
+    </span>
+  );
+}
+
+function RatingBadge({ rating }: { rating: EffectivenessRating }) {
+  const styles: Record<EffectivenessRating, string> = {
+    High: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
+    Medium: "border-amber-500/30 bg-amber-500/10 text-amber-300",
+    Low: "border-slate-600/40 bg-slate-700/20 text-slate-300",
+  };
+  return (
+    <span
+      className={`shrink-0 rounded-full border px-2.5 py-0.5 text-xs font-medium ${styles[rating]}`}
+    >
+      {rating} cover
+    </span>
   );
 }
 

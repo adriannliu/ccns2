@@ -1,4 +1,10 @@
 import { NextResponse } from "next/server";
+import {
+  BedrockRuntimeClient,
+  ConverseCommand,
+  type ContentBlock,
+  type ImageFormat,
+} from "@aws-sdk/client-bedrock-runtime";
 import { butterbase } from "@/lib/butterbase";
 import type {
   AnalysisResult,
@@ -13,8 +19,10 @@ export const runtime = "nodejs";
 // SYSTEM PROMPT
 // ---------------------------------------------------------------------------
 // TODO: Replace this placeholder with the exact system prompt text.
-// It should instruct the Vision-Language Model to return ONLY JSON matching
-// the AnalysisResult schema, using normalized [ymin, xmin, ymax, xmax] boxes.
+// It should instruct the Spatial Emergency VLM to return ONLY a JSON object
+// matching the AnalysisResult schema (see AGENTS.md), using normalized
+// [ymin, xmin, ymax, xmax] boxes. Claude does not have a json_object flag, so
+// the prompt must enforce "return JSON only, no prose, no markdown fences".
 const SYSTEM_PROMPT = `__SYSTEM_PROMPT_PLACEHOLDER__`;
 
 // Per-scenario user instruction appended after the image.
@@ -27,68 +35,88 @@ const SCENARIO_INSTRUCTIONS: Record<Scenario, string> = {
 };
 
 // ---------------------------------------------------------------------------
-// Vision AI call (OpenAI-compatible / Gemini-style placeholder)
+// AWS Bedrock — Claude 3.5 Sonnet via the Converse API
 // ---------------------------------------------------------------------------
-const VISION_API_URL = process.env.VISION_API_URL ?? "";
-const VISION_API_KEY = process.env.VISION_API_KEY ?? "";
-const VISION_MODEL = process.env.VISION_MODEL ?? "gpt-4o";
+const AWS_REGION = process.env.AWS_REGION ?? "us-east-1";
+const BEDROCK_MODEL_ID =
+  process.env.BEDROCK_MODEL_ID ??
+  "anthropic.claude-3-5-sonnet-20240620-v1:0";
 
-/** Ensure a data URL string for the model; strips nothing if already a URL. */
-function asDataUrl(image: string): string {
-  return image.startsWith("data:") ? image : `data:image/jpeg;base64,${image}`;
+// AGENTS.md inference parameters.
+const TEMPERATURE = 0.1;
+const MAX_TOKENS = 1024;
+
+/** Bedrock auth comes from the standard AWS credential chain. */
+function hasAwsCredentials(): boolean {
+  return Boolean(
+    process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY,
+  );
+}
+
+/** Parse a base64 (data URL or raw) image into bytes + Bedrock image format. */
+function parseImage(image: string): { bytes: Uint8Array; format: ImageFormat } {
+  let format: ImageFormat = "jpeg";
+  let base64 = image;
+
+  const match = /^data:image\/(png|jpe?g|gif|webp);base64,(.*)$/i.exec(image);
+  if (match) {
+    const ext = match[1].toLowerCase();
+    format = ext === "jpg" ? "jpeg" : (ext as ImageFormat);
+    base64 = match[2];
+  } else if (image.startsWith("data:")) {
+    // Unknown data URL prefix — strip everything up to the comma.
+    base64 = image.slice(image.indexOf(",") + 1);
+  }
+
+  return { bytes: new Uint8Array(Buffer.from(base64, "base64")), format };
+}
+
+/**
+ * Extract a JSON object from a model response that may include stray prose or
+ * markdown code fences, then parse it.
+ */
+function extractJson(text: string): unknown {
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(text);
+  const candidate = fenced ? fenced[1] : text;
+  const start = candidate.indexOf("{");
+  const end = candidate.lastIndexOf("}");
+  if (start === -1 || end === -1 || end <= start) {
+    throw new Error("Model response did not contain a JSON object.");
+  }
+  return JSON.parse(candidate.slice(start, end + 1));
 }
 
 async function callVisionModel(
   image: string,
   scenario: Scenario,
 ): Promise<AnalysisResult> {
-  // If no key is configured, fall back to a deterministic mock so the app is
-  // fully demoable at a hackathon without external credentials.
-  if (!VISION_API_KEY || !VISION_API_URL) {
+  // No AWS creds -> deterministic mock so the flow is demoable offline.
+  if (!hasAwsCredentials()) {
     return mockAnalysis(scenario);
   }
 
-  const res = await fetch(VISION_API_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${VISION_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: VISION_MODEL,
-      // OpenAI-compatible multimodal message format.
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        {
-          role: "user",
-          content: [
-            { type: "text", text: SCENARIO_INSTRUCTIONS[scenario] },
-            {
-              type: "image_url",
-              image_url: { url: asDataUrl(image) },
-            },
-          ],
-        },
-      ],
-      // Force structured JSON output where supported.
-      response_format: { type: "json_object" },
-      temperature: 0.2,
-    }),
+  const client = new BedrockRuntimeClient({ region: AWS_REGION });
+  const { bytes, format } = parseImage(image);
+
+  const content: ContentBlock[] = [
+    { text: SCENARIO_INSTRUCTIONS[scenario] },
+    { image: { format, source: { bytes } } },
+  ];
+
+  const command = new ConverseCommand({
+    modelId: BEDROCK_MODEL_ID,
+    system: [{ text: SYSTEM_PROMPT }],
+    messages: [{ role: "user", content }],
+    inferenceConfig: { temperature: TEMPERATURE, maxTokens: MAX_TOKENS },
   });
 
-  if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    throw new Error(`Vision API error ${res.status}: ${detail.slice(0, 300)}`);
+  const response = await client.send(command);
+  const text = response.output?.message?.content?.find((c) => "text" in c)?.text;
+  if (!text) {
+    throw new Error("Bedrock returned an empty response.");
   }
 
-  const payload = await res.json();
-  // OpenAI-compatible shape: choices[0].message.content is a JSON string.
-  const content: string | undefined = payload?.choices?.[0]?.message?.content;
-  if (!content) {
-    throw new Error("Vision API returned an empty response.");
-  }
-
-  return normalizeResult(JSON.parse(content));
+  return normalizeResult(extractJson(text) as Partial<AnalysisResult>);
 }
 
 /** Defensive normalization so the frontend always gets the full shape. */
@@ -154,10 +182,7 @@ export async function POST(req: Request) {
     );
   }
   if (!["FIRE", "EARTHQUAKE", "CODE_RED"].includes(scenario)) {
-    return NextResponse.json(
-      { error: "Invalid `scenario`." },
-      { status: 400 },
-    );
+    return NextResponse.json({ error: "Invalid `scenario`." }, { status: 400 });
   }
 
   try {
@@ -185,14 +210,31 @@ export async function POST(req: Request) {
 function mockAnalysis(scenario: Scenario): AnalysisResult {
   const base: AnalysisResult = {
     egress_points: [
-      { type: "Main Door", coordinates: [0.32, 0.04, 0.86, 0.2], status: "clear" },
-      { type: "Window", coordinates: [0.28, 0.74, 0.62, 0.95], status: "clear" },
+      {
+        type: "Primary Door",
+        coordinates: [0.32, 0.04, 0.86, 0.2],
+        accessibility_status: "Clear",
+      },
+      {
+        type: "Window",
+        coordinates: [0.28, 0.74, 0.62, 0.95],
+        accessibility_status: "Clear",
+      },
     ],
     hazards: [
-      { type: "Glass shelving", coordinates: [0.18, 0.4, 0.5, 0.58] },
+      {
+        description: "Glass shelving",
+        reason: "Can shatter into sharp debris and block movement.",
+        coordinates: [0.18, 0.4, 0.5, 0.58],
+      },
     ],
     safe_zones: [
-      { type: "Under sturdy desk", coordinates: [0.62, 0.42, 0.92, 0.7] },
+      {
+        type: "Cover",
+        description: "Sturdy desk in the corner",
+        effectiveness_rating: "High",
+        coordinates: [0.62, 0.42, 0.92, 0.7],
+      },
     ],
     actionable_instructions: [],
   };
@@ -200,33 +242,37 @@ function mockAnalysis(scenario: Scenario): AnalysisResult {
   switch (scenario) {
     case "FIRE":
       base.hazards.push({
-        type: "Power strip / cables",
+        description: "Power strip / cables",
+        reason: "Electrical ignition source near the floor exit path.",
         coordinates: [0.78, 0.06, 0.95, 0.26],
       });
-      base.egress_points[1].status = "compromised";
+      base.egress_points[1].accessibility_status = "Partially Blocked";
       base.actionable_instructions = [
-        "Stay low — crawl beneath the smoke line toward the main door.",
+        "Stay low — crawl beneath the smoke line toward the primary door.",
         "Feel the door with the back of your hand before opening it.",
         "Avoid the window exit on the right; smoke is banking on that wall.",
         "Once out, move 50 ft from the building and call emergency services.",
       ];
       break;
     case "EARTHQUAKE":
+      base.safe_zones[0].type = "Drop & Cover";
       base.actionable_instructions = [
         "DROP, COVER, and HOLD ON under the sturdy desk (green zone).",
         "Stay clear of the glass shelving — it can shatter and fall.",
         "Do not run for the door while shaking continues.",
-        "After shaking stops, exit calmly through the main door.",
+        "After shaking stops, exit calmly through the primary door.",
       ];
       break;
     case "CODE_RED":
       base.safe_zones.push({
-        type: "Corner out of sightline",
+        type: "Hiding Spot",
+        description: "Corner out of the door's sightline",
+        effectiveness_rating: "Medium",
         coordinates: [0.55, 0.04, 0.95, 0.22],
       });
-      base.egress_points[0].status = "blocked";
+      base.egress_points[0].accessibility_status = "Blocked";
       base.actionable_instructions = [
-        "Lock and barricade the main door immediately.",
+        "Lock and barricade the primary door immediately.",
         "Move to the corner out of the door's sightline and stay low.",
         "Silence your phone and turn off the lights.",
         "Remain quiet and out of view of the window until all-clear.",

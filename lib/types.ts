@@ -1,6 +1,8 @@
 /**
  * Shared domain types for SafeSpace.
  *
+ * Schema mirrors AGENTS.md (the Spatial Emergency VLM contract).
+ *
  * The Vision-Language Model returns normalized bounding boxes in the form
  * [ymin, xmin, ymax, xmax] where each value is in the range 0.0 -> 1.0,
  * with 0.0 = top/left and 1.0 = bottom/right of the image.
@@ -14,21 +16,35 @@ export type BBox = [number, number, number, number];
 /** The kind of region. Drives the overlay color in ImageOverlay. */
 export type RegionKind = "egress" | "hazard" | "safe_zone";
 
-export type EgressStatus = "clear" | "blocked" | "compromised" | "unknown";
+export type EgressType = "Primary Door" | "Secondary Door" | "Window";
+export type AccessibilityStatus = "Clear" | "Partially Blocked" | "Blocked";
 
-export interface SpatialRegion {
-  /** Human-readable label, e.g. "Window", "Main Door", "Under desk". */
-  type: string;
-  /** Normalized bounding box [ymin, xmin, ymax, xmax]. */
+export type SafeZoneType = "Hiding Spot" | "Cover" | "Drop & Cover";
+export type EffectivenessRating = "High" | "Medium" | "Low";
+
+export interface EgressPoint {
+  type: EgressType;
   coordinates: BBox;
-  /** Optional status, primarily used for egress points. */
-  status?: EgressStatus;
+  accessibility_status: AccessibilityStatus;
+}
+
+export interface Hazard {
+  description: string;
+  reason: string;
+  coordinates: BBox;
+}
+
+export interface SafeZone {
+  type: SafeZoneType;
+  description: string;
+  effectiveness_rating: EffectivenessRating;
+  coordinates: BBox;
 }
 
 export interface AnalysisResult {
-  egress_points: SpatialRegion[];
-  hazards: SpatialRegion[];
-  safe_zones: SpatialRegion[];
+  egress_points: EgressPoint[];
+  hazards: Hazard[];
+  safe_zones: SafeZone[];
   actionable_instructions: string[];
 }
 
@@ -50,7 +66,16 @@ export interface AnalyzeResponse extends AnalysisResult {
   };
 }
 
-/** A flattened region used by the overlay renderer. */
-export interface OverlayRegion extends SpatialRegion {
+/**
+ * A normalized region used by the overlay renderer. Each source region
+ * (egress / hazard / safe zone) is flattened into this common shape so the
+ * overlay can render a colored box + label chip uniformly.
+ */
+export interface OverlayRegion {
   kind: RegionKind;
+  coordinates: BBox;
+  /** Primary label shown in the chip (type or description). */
+  label: string;
+  /** Secondary detail (status / rating). */
+  detail?: string;
 }

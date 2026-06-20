@@ -7,14 +7,15 @@ This document outlines the AI agents utilized in this project, their core respon
 The core intelligence of the application. This Vision-Language Model (VLM) is responsible for interpreting physical spaces and applying situational emergency logic to identify safe zones, hazards, and egress routes.
 
 *   **Role:** Spatial Analyst & Emergency Routing
-*   **Model Recommendation:** Gemini 1.5 Pro or GPT-4o (requires high visual-spatial reasoning capabilities)
+*   **Model (in use):** Anthropic **Claude 3.5 Sonnet** on **AWS Bedrock**, invoked via the Converse API (`anthropic.claude-3-5-sonnet-20240620-v1:0`).
+*   **Alternatives:** Gemini 1.5 Pro or GPT-4o (any high visual-spatial-reasoning VLM).
 *   **Mode:** Zero-shot inference with strict JSON schema enforcement.
 
 ### 1.1 Parameters
 | Parameter | Value | Rationale |
 |---|---|---|
 | **Temperature** | `0.1` | Emergency routing requires high determinism and precision; creativity is dangerous here. |
-| **Response Format** | `json_object` | Required for reliable frontend overlay mapping. |
+| **Response Format** | JSON-only (prompt-enforced) | Bedrock/Claude has no `json_object` flag; the system prompt mandates raw JSON and the route parses it tolerantly via `extractJson()`. Required for reliable frontend overlay mapping. |
 | **Max Tokens** | `1024` | Sufficient for JSON payload without risking run-on outputs. |
 
 ### 1.2 I/O Specification

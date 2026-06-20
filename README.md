@@ -60,13 +60,23 @@ image (`inline-block` + `max-w/max-h` auto sizing) so `object-contain`
 letterboxing can never shift the coordinate space. Colors: 🔵 exits, 🟢 safe
 zones, 🔴 hazards.
 
+## AI model
+
+The VLM is **Anthropic Claude 3.5 Sonnet on AWS Bedrock**, called via the
+**Converse API** (`@aws-sdk/client-bedrock-runtime`). The image is sent as bytes
+in a multimodal content block; inference runs at `temperature 0.1` / `maxTokens
+1024` (per `AGENTS.md`). Claude has no `json_object` flag, so the route enforces
+JSON via the system prompt and a tolerant `extractJson()` parser.
+
 ## Configuration (`.env`)
 
 ```bash
-# Vision-Language Model (OpenAI-compatible or Gemini)
-VISION_API_URL="https://api.openai.com/v1/chat/completions"
-VISION_API_KEY="sk-..."
-VISION_MODEL="gpt-4o"
+# AWS Bedrock (Claude 3.5 Sonnet) — uses the AWS SigV4 credential chain
+AWS_REGION="us-east-1"
+AWS_ACCESS_KEY_ID="AKIA..."
+AWS_SECRET_ACCESS_KEY="..."
+# AWS_SESSION_TOKEN=""   # only for temporary/STS creds
+BEDROCK_MODEL_ID="anthropic.claude-3-5-sonnet-20240620-v1:0"
 
 # Butterbase (REST)
 BUTTERBASE_API_URL="https://api.butterbase.dev/v1"
@@ -76,10 +86,15 @@ BUTTERBASE_TABLE="scans"
 
 - **System prompt:** drop your exact prompt into the `SYSTEM_PROMPT` constant in
   `app/api/analyze/route.ts` (currently a placeholder).
+- **Offline mode:** without `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, the
+  route returns a deterministic mock so the flow is fully demoable.
+- **Bedrock access:** enable model access for Claude 3.5 Sonnet in your AWS
+  account/region, and ensure the IAM principal has `bedrock:InvokeModel`.
 - **Butterbase:** adjust endpoints/shapes in `lib/butterbase.ts` to match the
   real API once you have docs.
 
 ## Deploy
 
 Designed for **Vercel** — push the repo and import. Set the env vars above in the
-Vercel dashboard.
+Vercel dashboard (the AWS keys must belong to an IAM user/role with Bedrock
+invoke permissions).
