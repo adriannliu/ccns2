@@ -119,19 +119,19 @@ BUTTERBASE_TABLE="scans"
 
 ### S3 setup
 
-1. Create the bucket (same region as Bedrock):
+1. Create the bucket (same region as Bedrock, e.g. `us-west-2`):
 
 ```bash
-aws s3 mb s3://safespace-scans --region us-east-1
+aws s3 mb s3://safespace-scans-usw2-073158194660 --region us-west-2
 ```
 
-2. Add CORS for browser presigned PUT:
+2. Add CORS for browser presigned PUT (local + production):
 
 ```bash
-aws s3api put-bucket-cors --bucket safespace-scans --cors-configuration '{
+aws s3api put-bucket-cors --bucket safespace-scans-usw2-073158194660 --region us-west-2 --cors-configuration '{
   "CORSRules": [{
     "AllowedMethods": ["PUT", "GET"],
-    "AllowedOrigins": ["http://localhost:3000", "https://YOUR-DOMAIN.vercel.app"],
+    "AllowedOrigins": ["http://localhost:3000", "https://ccns2.vercel.app"],
     "AllowedHeaders": ["*"],
     "ExposeHeaders": ["ETag"],
     "MaxAgeSeconds": 3000

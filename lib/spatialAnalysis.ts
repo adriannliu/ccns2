@@ -1,3 +1,4 @@
+import type { SafetyPlanSelection } from "@/lib/bedrockTool";
 import {
   BedrockRuntimeClient,
   ConverseCommand,
@@ -5,8 +6,21 @@ import {
   type ImageFormat,
 } from "@aws-sdk/client-bedrock-runtime";
 import type { AnalyzeInput } from "@/lib/analyzeInput";
-import { normalizeBBox } from "@/lib/bbox";
+import {
+  bboxIoU,
+  isPlausibleDoorBBox,
+  isPlausibleDropAndCoverBBox,
+  isPlausibleSafeZoneBBox,
+  normalizeBBox,
+} from "@/lib/bbox";
 import { SAFETY_PLAN_TOOL_CONFIG, extractToolInput } from "@/lib/bedrockTool";
+import { composeMockSafetyPlan, composeSafetyPlan } from "@/lib/composeSafetyPlan";
+import {
+  formatDetectionsForPrompt,
+  mockDetections,
+  runObjectDetection,
+  type SpatialDetection,
+} from "@/lib/detection";
 import { normalizeRoomModel } from "@/lib/roomModel";
 import { contentTypeToImageFormat, s3Location } from "@/lib/s3";
 import { SYSTEM_PROMPT_PHOTO, SYSTEM_PROMPT_VIDEO360 } from "@/lib/vlmPrompts";
@@ -14,11 +28,11 @@ import type { AnalysisResult, EgressPoint, Hazard, SafeZone, Scenario } from "@/
 
 const SCENARIO_INSTRUCTIONS: Record<Scenario, string> = {
   FIRE:
-    "Scenario: FIRE. Label only clearly visible doors/windows. Mark sturdy cover, not open floor. Flag flammable items and glass.",
+    "Scenario: FIRE. Select door/window detections for egress. Mark glass/fixtures as hazards. Cover = furniture only.",
   EARTHQUAKE:
-    "Scenario: EARTHQUAKE. Drop & Cover under sturdy fixed desks/tables only — box the furniture, not space underneath. Flag falling/shattering hazards.",
+    "Scenario: EARTHQUAKE. Drop & Cover = desk/table furniture detections only. Mark structure/fixtures/glass as hazards.",
   CODE_RED:
-    "Scenario: CODE_RED. Hiding Spot only for true concealment (closet, stall, behind solid partition) — NOT under open-sided desks or open floor. Omit if none qualify.",
+    "Scenario: CODE_RED. Hiding Spot = large furniture that could conceal (wardrobe, cabinet). Mark sightline hazards.",
 };
 
 const AWS_REGION = process.env.AWS_REGION ?? "us-east-1";
@@ -77,18 +91,6 @@ function toImageBlock(source: AnalyzeInput["sources"][number]): ContentBlock {
   return { image: { format, source: { bytes } } };
 }
 
-function pickArray(raw: Record<string, unknown>, keys: string[]): unknown[] {
-  for (const key of keys) {
-    if (Array.isArray(raw[key])) return raw[key] as unknown[];
-  }
-  return [];
-}
-
-/**
- * Coerce the model's instructions into a string[]. Some vision models (e.g.
- * the Nova fallback) return a single prose string instead of a JSON array,
- * which would otherwise crash the UI's `.map()`.
- */
 function toStringArray(raw: unknown): string[] {
   if (Array.isArray(raw)) {
     return raw.filter((s): s is string => typeof s === "string" && s.trim() !== "");
@@ -105,38 +107,56 @@ function toStringArray(raw: unknown): string[] {
   return [];
 }
 
-function normalizeResult(raw: Partial<AnalysisResult>): AnalysisResult {
-  const record = raw as Record<string, unknown>;
-  const egressRaw = pickArray(record, ["egress_points", "egressPoints", "exits"]);
-  const safeRaw = pickArray(record, ["safe_zones", "safeZones", "shelter"]);
-  const hazardRaw = pickArray(record, ["hazards", "hazard_points"]);
+function normalizeEgressPoints(raw: EgressPoint[]): EgressPoint[] {
+  const points = raw.filter((p) => {
+    if (p.type === "Window") return true;
+    return isPlausibleDoorBBox(p.coordinates);
+  });
 
-  const egress_points = egressRaw
-    .map((rawItem) => {
-      const item = rawItem as Partial<EgressPoint>;
-      const coordinates = normalizeBBox(item.coordinates);
-      if (!coordinates) return null;
-      return { ...item, coordinates } as EgressPoint;
-    })
-    .filter((item): item is EgressPoint => item !== null);
+  const drop = new Set<number>();
+  for (let i = 0; i < points.length; i++) {
+    for (let j = i + 1; j < points.length; j++) {
+      if (bboxIoU(points[i].coordinates, points[j].coordinates) < 0.35) continue;
+      const a = points[i];
+      const b = points[j];
+      if (a.type !== "Window" && b.type === "Window") drop.add(i);
+      else if (b.type !== "Window" && a.type === "Window") drop.add(j);
+      else if (a.type !== "Window" && b.type !== "Window") {
+        if (a.type === "Primary Door" && b.type === "Secondary Door") drop.add(j);
+        else if (b.type === "Primary Door" && a.type === "Secondary Door") drop.add(i);
+        else drop.add(j);
+      }
+    }
+  }
+  return points.filter((_, i) => !drop.has(i));
+}
 
-  const safe_zones = safeRaw
-    .map((rawItem) => {
-      const item = rawItem as Partial<SafeZone>;
-      const coordinates = normalizeBBox(item.coordinates);
-      if (!coordinates) return null;
-      return { ...item, coordinates } as SafeZone;
-    })
-    .filter((item): item is SafeZone => item !== null);
+const INVALID_SAFE_ZONE_TEXT =
+  /\b(pillar|column|post|pole|beam|joist|rafter|truss|girder|soffit|ceiling|duct|aircon|air.?con|air.?condition|hvac|ventilation|exhaust|conduit|pipe|cable tray|sprinkler|structural|I-beam|concrete column|overhead|light fixture|mount(ed)?\s+(on|to)\s+(the\s+)?ceiling)\b/i;
 
-  const hazards = hazardRaw
-    .map((rawItem) => {
-      const item = rawItem as Partial<Hazard>;
-      const coordinates = normalizeBBox(item.coordinates);
-      if (!coordinates) return null;
-      return { ...item, coordinates } as Hazard;
-    })
-    .filter((item): item is Hazard => item !== null);
+const DROP_COVER_FURNITURE =
+  /\b(desk|table|counter|workbench|credenza|workstation|island)\b/i;
+
+function normalizeSafeZones(raw: SafeZone[]): SafeZone[] {
+  return raw.filter((zone) => {
+    const desc = zone.description ?? "";
+    if (INVALID_SAFE_ZONE_TEXT.test(desc)) return false;
+    if (zone.type === "Drop & Cover") {
+      if (!isPlausibleDropAndCoverBBox(zone.coordinates)) return false;
+      if (!DROP_COVER_FURNITURE.test(desc)) return false;
+      return true;
+    }
+    return isPlausibleSafeZoneBBox(zone.coordinates);
+  });
+}
+
+function normalizeResult(
+  raw: Partial<AnalysisResult>,
+  detections?: SpatialDetection[],
+): AnalysisResult {
+  const egress_points = normalizeEgressPoints(raw.egress_points ?? []);
+  const safe_zones = normalizeSafeZones(raw.safe_zones ?? []);
+  const hazards = raw.hazards ?? [];
 
   return {
     egress_points,
@@ -144,22 +164,29 @@ function normalizeResult(raw: Partial<AnalysisResult>): AnalysisResult {
     safe_zones,
     actionable_instructions: toStringArray(raw.actionable_instructions),
     room_model: normalizeRoomModel(raw.room_model),
+    detections,
+    detection_sources: detections
+      ? [...new Set(detections.map((d) => d.source))]
+      : undefined,
   };
 }
 
-async function invokeModel(
+async function invokeReasoningModel(
   client: BedrockRuntimeClient,
   modelId: string,
   input: AnalyzeInput,
   scenario: Scenario,
-): Promise<AnalysisResult> {
+  detections: SpatialDetection[],
+): Promise<SafetyPlanSelection> {
   const isVideo = input.mode === "video360";
   const isMulti = input.sources.length > 1;
+  const detectionBlock = formatDetectionsForPrompt(detections);
+
   const intro = isVideo
-    ? `${SCENARIO_INSTRUCTIONS[scenario]}\n\nThese ${input.sources.length} frames are a 360° room scan. Return room_model.`
+    ? `${SCENARIO_INSTRUCTIONS[scenario]}\n\n360° scan with ${input.sources.length} frames. Detections are from frame 1.\n\n${detectionBlock}`
     : isMulti
-      ? `${SCENARIO_INSTRUCTIONS[scenario]}\n\nThese ${input.sources.length} photos are the same room from different angles.`
-      : SCENARIO_INSTRUCTIONS[scenario];
+      ? `${SCENARIO_INSTRUCTIONS[scenario]}\n\nMultiple photos; detections from frame 1.\n\n${detectionBlock}`
+      : `${SCENARIO_INSTRUCTIONS[scenario]}\n\n${detectionBlock}`;
 
   const content: ContentBlock[] = [
     { text: intro },
@@ -176,9 +203,6 @@ async function invokeModel(
       modelId,
       system: [{ text: isVideo ? SYSTEM_PROMPT_VIDEO360 : SYSTEM_PROMPT_PHOTO }],
       messages: [{ role: "user", content }],
-      // Force structured output. Both Claude 3+ and Nova must return arguments
-      // conforming to the tool schema — far more reliable than free-form JSON,
-      // which Nova in particular mangles into prose/string lists.
       toolConfig: SAFETY_PLAN_TOOL_CONFIG,
       inferenceConfig: {
         temperature: TEMPERATURE,
@@ -188,56 +212,34 @@ async function invokeModel(
   );
 
   const blocks = response.output?.message?.content;
-
-  // Preferred path: structured arguments from the forced tool call.
   const toolInput = extractToolInput(blocks);
   if (toolInput && typeof toolInput === "object") {
-    return normalizeResult(toolInput as Partial<AnalysisResult>);
+    return toolInput as SafetyPlanSelection;
   }
 
-  // Fallback: a model that answered with raw JSON text instead of a tool call.
   const text = blocks?.find((c) => "text" in c)?.text;
   if (!text) throw new Error("Bedrock returned no usable tool or text output.");
-  return normalizeResult(extractJson(text) as Partial<AnalysisResult>);
+  return extractJson(text) as SafetyPlanSelection;
 }
 
-function mockAnalysis(scenario: Scenario): AnalysisResult {
-  const base: AnalysisResult = {
-    egress_points: [
-      { type: "Primary Door", coordinates: [0.32, 0.04, 0.86, 0.2], accessibility_status: "Clear" },
-      { type: "Window", coordinates: [0.28, 0.74, 0.62, 0.95], accessibility_status: "Clear" },
-    ],
-    hazards: [{ description: "Glass shelving", reason: "Can shatter.", coordinates: [0.18, 0.4, 0.5, 0.58] }],
-    safe_zones: [{ type: "Cover", description: "Sturdy desk", effectiveness_rating: "High", coordinates: [0.62, 0.42, 0.92, 0.7] }],
-    actionable_instructions: [],
-  };
-  if (scenario === "FIRE") {
-    base.actionable_instructions = ["Stay low.", "Head to primary door.", "Call 911 once outside."];
-  } else if (scenario === "EARTHQUAKE") {
-    base.safe_zones[0].type = "Drop & Cover";
-    base.actionable_instructions = ["Drop, cover, hold on.", "Stay away from glass.", "Exit after shaking stops."];
-  } else {
-    base.actionable_instructions = ["Lock the door.", "Hide out of sight.", "Silence your phone."];
-  }
-  return base;
-}
-
-function mockVideoAnalysis(scenario: Scenario): AnalysisResult {
-  const photo = mockAnalysis(scenario);
+function mockVideoRoomModel(scenario: Scenario): AnalysisResult["room_model"] {
   return {
-    ...photo,
-    room_model: {
-      walls: [[[0.08, 0.08], [0.92, 0.08]], [[0.92, 0.08], [0.92, 0.92]], [[0.92, 0.92], [0.08, 0.92]], [[0.08, 0.92], [0.08, 0.08]]],
-      landmarks: [
-        { label: "Main exit", type: "exit", position: [0.5, 0.08], detail: "Clear" },
-        { label: "Desk", type: "safe_zone", position: [0.72, 0.62], detail: "Cover" },
-        { label: "Glass shelf", type: "hazard", position: [0.28, 0.42] },
-      ],
-      scan_origin: [0.5, 0.78],
-      exit_path: scenario === "EARTHQUAKE"
+    walls: [
+      [[0.08, 0.08], [0.92, 0.08]],
+      [[0.92, 0.08], [0.92, 0.92]],
+      [[0.92, 0.92], [0.08, 0.92]],
+      [[0.08, 0.92], [0.08, 0.08]],
+    ],
+    landmarks: [
+      { label: "Main exit", type: "exit", position: [0.5, 0.08], detail: "Clear" },
+      { label: "Desk", type: "safe_zone", position: [0.72, 0.62], detail: "Cover" },
+      { label: "Glass shelf", type: "hazard", position: [0.28, 0.42] },
+    ],
+    scan_origin: [0.5, 0.78],
+    exit_path:
+      scenario === "EARTHQUAKE"
         ? [[0.5, 0.78], [0.72, 0.62]]
         : [[0.5, 0.78], [0.5, 0.4], [0.5, 0.12]],
-    },
   };
 }
 
@@ -245,11 +247,25 @@ export async function runSpatialAnalysis(
   input: AnalyzeInput,
   scenario: Scenario,
 ): Promise<{ result: AnalysisResult; model: string }> {
+  const overlaySource = input.sources[0];
+
   if (!hasAwsCredentials()) {
-    return {
-      result: input.mode === "video360" ? mockVideoAnalysis(scenario) : mockAnalysis(scenario),
-      model: "mock",
-    };
+    const detections = mockDetections();
+    const composed = composeMockSafetyPlan(detections, scenario);
+    const result = normalizeResult(
+      input.mode === "video360"
+        ? { ...composed, room_model: mockVideoRoomModel(scenario) }
+        : composed,
+      detections,
+    );
+    return { result, model: "mock" };
+  }
+
+  const { detections, sources: detectionSources } =
+    await runObjectDetection(overlaySource);
+
+  if (detectionSources.length === 0) {
+    console.warn("[spatialAnalysis] No detectors succeeded; proceeding with empty detections.");
   }
 
   const client = new BedrockRuntimeClient({ region: AWS_REGION });
@@ -261,7 +277,16 @@ export async function runSpatialAnalysis(
   let lastErr: unknown;
   for (const modelId of candidates) {
     try {
-      return { result: await invokeModel(client, modelId, input, scenario), model: modelId };
+      const selection = await invokeReasoningModel(
+        client,
+        modelId,
+        input,
+        scenario,
+        detections,
+      );
+      const composed = composeSafetyPlan(detections, selection);
+      const result = normalizeResult(composed, detections);
+      return { result, model: modelId };
     } catch (err) {
       lastErr = err;
     }

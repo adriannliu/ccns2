@@ -3,7 +3,12 @@ import {
   BedrockRuntimeClient,
   ConverseCommand,
 } from "@aws-sdk/client-bedrock-runtime";
+import {
+  DetectLabelsCommand,
+  RekognitionClient,
+} from "@aws-sdk/client-rekognition";
 import { isS3Configured, s3RoundTrip } from "@/lib/s3";
+import { isYoloConfigured } from "@/lib/detection/yoloRoboflow";
 
 export const runtime = "nodejs";
 
@@ -37,8 +42,31 @@ async function checkBedrock(): Promise<Check> {
   }
 }
 
+async function checkRekognition(): Promise<Check> {
+  if (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
+    return { ok: false, detail: "AWS credentials are not set." };
+  }
+  try {
+    const client = new RekognitionClient({ region: AWS_REGION });
+    await client.send(
+      new DetectLabelsCommand({
+        Image: { Bytes: Buffer.from("healthcheck") },
+        MaxLabels: 1,
+        MinConfidence: 99,
+      }),
+    );
+    return { ok: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "error";
+    // InvalidImageFormatException means the API is reachable.
+    if (msg.includes("InvalidImageFormatException") || msg.includes("invalid image")) {
+      return { ok: true, detail: "API reachable" };
+    }
+    return { ok: false, detail: msg };
+  }
+}
+
 /**
- * GET /api/health
  * Verifies the AWS wiring end to end: env presence, a live S3 read/write
  * round-trip, and a tiny Bedrock Converse ping. Useful to confirm setup
  * without running a full scan.
@@ -53,14 +81,20 @@ export async function GET() {
     AWS_ACCOUNT_ID: Boolean(process.env.AWS_ACCOUNT_ID),
   };
 
-  const [s3, bedrock] = await Promise.all([s3RoundTrip(), checkBedrock()]);
+  const [s3, bedrock, rekognition] = await Promise.all([
+    s3RoundTrip(),
+    checkBedrock(),
+    checkRekognition(),
+  ]);
 
   const checks = {
     env,
     s3: { ok: s3.ok, detail: s3.error },
     bedrock,
+    rekognition,
+    yolo: { ok: isYoloConfigured(), detail: isYoloConfigured() ? "configured" : "ROBOFLOW_API_KEY not set" },
   };
-  const ok = s3.ok && bedrock.ok;
+  const ok = s3.ok && bedrock.ok && rekognition.ok;
 
   return NextResponse.json({ ok, model: BEDROCK_MODEL_ID, checks });
 }

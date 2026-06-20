@@ -1,13 +1,8 @@
 /**
  * Bedrock Converse "tool use" definition for SafeSpace.
  *
- * Instead of asking the model to emit raw JSON (which Amazon Nova in particular
- * is unreliable at — it tends to return prose strings and string lists), we
- * force the model to call a single tool whose `inputSchema` IS our output
- * schema. With `toolChoice: { tool }` the model must return arguments matching
- * the schema, which both Anthropic Claude 3+ and Amazon Nova support.
- *
- * See: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
+ * Phase 1: Rekognition + YOLO produce bounding boxes.
+ * Phase 2: VLM selects detection ids and writes scenario reasoning only.
  */
 
 import type {
@@ -15,17 +10,9 @@ import type {
   ToolConfiguration,
 } from "@aws-sdk/client-bedrock-runtime";
 import type { DocumentType } from "@smithy/types";
+import type { RoomModel } from "@/lib/types";
 
 export const SAFETY_PLAN_TOOL_NAME = "emit_safety_plan";
-
-const BBOX = {
-  type: "array",
-  description:
-    "Tight bounding box [ymin, xmin, ymax, xmax] around the physical object (door, glass pane, desk top, shelf) — not open floor or empty space beneath furniture. Each value 0.0 (top/left) to 1.0 (bottom/right). ymin < ymax and xmin < xmax.",
-  items: { type: "number" },
-  minItems: 4,
-  maxItems: 4,
-} as const;
 
 const POINT2D = {
   type: "array",
@@ -35,93 +22,100 @@ const POINT2D = {
   maxItems: 2,
 } as const;
 
-/** JSON schema mirroring lib/types.ts `AnalysisResult`. */
+/** VLM output — references pre-detected objects by id (no invented bboxes). */
+export interface SafetyPlanSelection {
+  egress_selections?: Array<{
+    detection_id: string;
+    type: "Primary Door" | "Secondary Door" | "Window";
+    accessibility_status: "Clear" | "Partially Blocked" | "Blocked";
+  }>;
+  safe_zone_selections?: Array<{
+    detection_id: string;
+    type: "Hiding Spot" | "Cover" | "Drop & Cover";
+    description: string;
+    effectiveness_rating: "High" | "Medium" | "Low";
+  }>;
+  hazard_selections?: Array<{
+    detection_id: string;
+    reason: string;
+    description?: string;
+  }>;
+  actionable_instructions: string[];
+  room_model?: RoomModel;
+}
+
 const SAFETY_PLAN_SCHEMA = {
   type: "object",
   properties: {
-    egress_points: {
+    egress_selections: {
       type: "array",
       description:
-        "Visible doors and windows only. Windows require clear evidence (glass + frame/sill/daylight) — not mirrors or screens. Omit uncertain openings. Doors-only is OK.",
+        "Exits chosen from detections with category egress_door or egress_window. One Primary Door max.",
       items: {
         type: "object",
         properties: {
+          detection_id: {
+            type: "string",
+            description: "Id from the DETECTIONS list (e.g. det-1).",
+          },
           type: {
             type: "string",
             enum: ["Primary Door", "Secondary Door", "Window"],
-            description:
-              "Window only when glass pane + frame/sill/blinds or outdoor view is visible. One Primary Door.",
           },
-          coordinates: BBOX,
           accessibility_status: {
             type: "string",
             enum: ["Clear", "Partially Blocked", "Blocked"],
-            description:
-              "Clear = unobstructed; Partially Blocked = clutter near opening; Blocked = not passable.",
           },
         },
-        required: ["type", "coordinates", "accessibility_status"],
+        required: ["detection_id", "type", "accessibility_status"],
       },
     },
-    hazards: {
+    hazard_selections: {
       type: "array",
       description:
-        "Visible objects dangerous in THIS scenario. Reason must cite the scenario mechanism.",
+        "Hazards chosen from detections (especially structure, fixture, glass furniture).",
       items: {
         type: "object",
         properties: {
-          description: {
-            type: "string",
-            description: "Specific visible object (e.g. tall unsecured bookshelf).",
-          },
-          reason: {
-            type: "string",
-            description: "Why it is hazardous in this scenario.",
-          },
-          coordinates: BBOX,
+          detection_id: { type: "string" },
+          reason: { type: "string" },
+          description: { type: "string" },
         },
-        required: ["description", "reason", "coordinates"],
+        required: ["detection_id", "reason"],
       },
     },
-    safe_zones: {
+    safe_zone_selections: {
       type: "array",
       description:
-        "Legitimate cover or concealment only. Empty array if none qualify. NEVER open floor or under open-sided desks. Hiding Spot = true concealment (closet, stall, behind solid partition). Drop & Cover = sturdy fixed desk/table top.",
+        "Safe zones from furniture detections only. Drop & Cover = desk/table on floor. Empty if none.",
       items: {
         type: "object",
         properties: {
+          detection_id: { type: "string" },
           type: {
             type: "string",
             enum: ["Hiding Spot", "Cover", "Drop & Cover"],
           },
-          description: {
-            type: "string",
-            description:
-              "Name the physical object providing cover/concealment and why it helps this scenario.",
-          },
+          description: { type: "string" },
           effectiveness_rating: {
             type: "string",
             enum: ["High", "Medium", "Low"],
-            description: "High = solid fixed mass or enclosed concealment.",
           },
-          coordinates: BBOX,
         },
-        required: ["type", "description", "effectiveness_rating", "coordinates"],
+        required: ["detection_id", "type", "description", "effectiveness_rating"],
       },
     },
     actionable_instructions: {
       type: "array",
-      description: "3-6 ordered, imperative survival steps. One sentence each.",
+      description: "3-6 ordered imperative steps referencing selected detection labels.",
       items: { type: "string" },
     },
     room_model: {
       type: "object",
-      description:
-        "Synthesized TOP-DOWN floor plan. REQUIRED for 360° video scans; omit for single photos.",
+      description: "Top-down floor plan. REQUIRED for 360° scans only.",
       properties: {
         walls: {
           type: "array",
-          description: "Wall segments, each a pair of points [[x1,y1],[x2,y2]].",
           items: { type: "array", items: POINT2D, minItems: 2, maxItems: 2 },
         },
         landmarks: {
@@ -147,37 +141,22 @@ const SAFETY_PLAN_SCHEMA = {
             required: ["label", "type", "position"],
           },
         },
-        exit_path: {
-          type: "array",
-          description: "3+ waypoints from scan_origin to the primary exit.",
-          items: POINT2D,
-        },
+        exit_path: { type: "array", items: POINT2D },
         scan_origin: POINT2D,
       },
       required: ["walls", "landmarks", "exit_path", "scan_origin"],
     },
   },
-  required: [
-    "egress_points",
-    "hazards",
-    "safe_zones",
-    "actionable_instructions",
-  ],
+  required: ["actionable_instructions"],
 } as const;
 
-/**
- * Forced-tool config: the model MUST call `emit_safety_plan`, returning
- * arguments that conform to the schema above. This is the reliable structured
- * output path for both Claude and Nova.
- */
 export const SAFETY_PLAN_TOOL_CONFIG: ToolConfiguration = {
   tools: [
     {
       toolSpec: {
         name: SAFETY_PLAN_TOOL_NAME,
         description:
-          "Return the spatial emergency safety plan for the room as structured data. Always call this tool exactly once.",
-        // The SDK types `json` as a loose smithy Document; our schema satisfies it.
+          "Select from the provided DETECTION list by id and return scenario reasoning. Never invent detection ids or coordinates.",
         inputSchema: { json: SAFETY_PLAN_SCHEMA as unknown as DocumentType },
       },
     },
@@ -185,11 +164,6 @@ export const SAFETY_PLAN_TOOL_CONFIG: ToolConfiguration = {
   toolChoice: { tool: { name: SAFETY_PLAN_TOOL_NAME } },
 };
 
-/**
- * Pull the structured tool arguments out of a Converse response. Falls back to
- * `null` if the model returned text instead of a tool call (caller can then try
- * to parse raw JSON from any text block).
- */
 export function extractToolInput(
   content: ContentBlock[] | undefined,
 ): unknown | null {
