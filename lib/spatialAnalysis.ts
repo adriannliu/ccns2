@@ -22,7 +22,7 @@ import {
   type SpatialDetection,
 } from "@/lib/detection";
 import { normalizeRoomModel } from "@/lib/roomModel";
-import { contentTypeToImageFormat, s3Location } from "@/lib/s3";
+import { contentTypeToImageFormat, getObjectBytes } from "@/lib/s3";
 import { SYSTEM_PROMPT_PHOTO, SYSTEM_PROMPT_VIDEO360 } from "@/lib/vlmPrompts";
 import type { AnalysisResult, EgressPoint, Hazard, SafeZone, Scenario } from "@/lib/types";
 
@@ -78,17 +78,42 @@ function extractJson(text: string): unknown {
   return JSON.parse(candidate.slice(start, end + 1));
 }
 
-function toImageBlock(source: AnalyzeInput["sources"][number]): ContentBlock {
+/** Claude on Bedrock does not accept s3Location for images — fetch bytes server-side. */
+async function toImageBlock(
+  source: AnalyzeInput["sources"][number],
+): Promise<ContentBlock> {
   if (source.kind === "s3") {
+    const bytes = await getObjectBytes(source.key);
     return {
       image: {
         format: contentTypeToImageFormat(source.contentType),
-        source: { s3Location: s3Location(source.key) },
+        source: { bytes },
       },
     };
   }
   const { bytes, format } = parseImage(source.image);
   return { image: { format, source: { bytes } } };
+}
+
+async function buildUserContent(
+  input: AnalyzeInput,
+  intro: string,
+): Promise<ContentBlock[]> {
+  const isVideo = input.mode === "video360";
+  const isMulti = input.sources.length > 1;
+
+  if (isVideo || isMulti) {
+    const blocks: ContentBlock[] = [{ text: intro }];
+    for (let i = 0; i < input.sources.length; i++) {
+      blocks.push({
+        text: isVideo ? `Frame ${i + 1}:` : `Photo ${i + 1}:`,
+      });
+      blocks.push(await toImageBlock(input.sources[i]));
+    }
+    return blocks;
+  }
+
+  return [{ text: intro }, await toImageBlock(input.sources[0])];
 }
 
 function toStringArray(raw: unknown): string[] {
@@ -188,15 +213,7 @@ async function invokeReasoningModel(
       ? `${SCENARIO_INSTRUCTIONS[scenario]}\n\nMultiple photos; detections from frame 1.\n\n${detectionBlock}`
       : `${SCENARIO_INSTRUCTIONS[scenario]}\n\n${detectionBlock}`;
 
-  const content: ContentBlock[] = [
-    { text: intro },
-    ...(isVideo || isMulti
-      ? input.sources.flatMap((src, i) => [
-          { text: isVideo ? `Frame ${i + 1}:` : `Photo ${i + 1}:` },
-          toImageBlock(src),
-        ])
-      : [toImageBlock(input.sources[0])]),
-  ];
+  const content = await buildUserContent(input, intro);
 
   const response = await client.send(
     new ConverseCommand({

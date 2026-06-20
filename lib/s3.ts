@@ -15,8 +15,8 @@ import type { ImageFormat } from "@aws-sdk/client-bedrock-runtime";
  *  1. Client asks /api/upload for a presigned PUT URL.
  *  2. Client uploads the photo bytes DIRECTLY to S3 (bypasses our serverless
  *     function body limit and Bedrock's ~5MB inline-image cap).
- *  3. /api/analyze passes the S3 object to Bedrock Converse via `s3Location`
- *     and returns a presigned GET URL for the results page to display.
+ *  3. /api/analyze fetches S3 bytes and passes inline images to Bedrock Converse
+ *     (Claude does not support s3Location image sources; Nova does).
  */
 
 const REGION = process.env.S3_REGION ?? process.env.AWS_REGION ?? "us-east-1";
