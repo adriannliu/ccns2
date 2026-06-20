@@ -1,0 +1,223 @@
+"use client";
+
+import { useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
+import {
+  ArrowLeft,
+  Camera,
+  ImageUp,
+  Loader2,
+  RefreshCw,
+  ScanLine,
+} from "lucide-react";
+import { SCENARIOS } from "@/lib/scenarios";
+import type { AnalyzeResponse, Scenario } from "@/lib/types";
+import { saveScan } from "@/lib/scanStore";
+
+/** Read a File into a base64 data URL. */
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+export default function ScanPage() {
+  const router = useRouter();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [scenario, setScenario] = useState<Scenario>("FIRE");
+  const [image, setImage] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setError(null);
+    try {
+      const dataUrl = await fileToDataUrl(file);
+      setImage(dataUrl);
+    } catch {
+      setError("Could not read that image. Try another photo.");
+    }
+  }
+
+  async function runAnalysis() {
+    if (!image) return;
+    setLoading(true);
+    setError(null);
+
+    try {
+      const res = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image, scenario }),
+      });
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body?.error ?? `Analysis failed (${res.status})`);
+      }
+
+      const result = (await res.json()) as AnalyzeResponse;
+      saveScan({ image, scenario, result, createdAt: Date.now() });
+      router.push("/results");
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Something went wrong. Try again.",
+      );
+      setLoading(false);
+    }
+  }
+
+  return (
+    <main className="bg-grid mx-auto flex min-h-screen w-full max-w-md flex-col px-5 pb-28 pt-6">
+      {/* Header */}
+      <header className="mb-6 flex items-center gap-3">
+        <Link
+          href="/"
+          className="rounded-full border border-slate-800 bg-slate-900/60 p-2 text-slate-300 transition hover:text-white"
+          aria-label="Back to home"
+        >
+          <ArrowLeft className="h-5 w-5" />
+        </Link>
+        <div>
+          <h1 className="text-xl font-bold tracking-tight">Scan a space</h1>
+          <p className="text-sm text-slate-400">
+            Pick a scenario, then capture the room.
+          </p>
+        </div>
+      </header>
+
+      {/* Step 1 — Scenario */}
+      <section className="mb-6">
+        <h2 className="mb-3 text-xs font-semibold uppercase tracking-widest text-slate-500">
+          1 · Emergency scenario
+        </h2>
+        <div
+          role="radiogroup"
+          aria-label="Emergency scenario"
+          className="grid grid-cols-3 gap-2"
+        >
+          {SCENARIOS.map((s) => {
+            const Icon = s.icon;
+            const selected = scenario === s.id;
+            return (
+              <button
+                key={s.id}
+                role="radio"
+                aria-checked={selected}
+                onClick={() => setScenario(s.id)}
+                className={`flex flex-col items-center gap-2 rounded-2xl border p-3 text-center transition ${
+                  selected
+                    ? `${s.accent.bg} ${s.accent.border} ${s.accent.glow}`
+                    : "border-slate-800 bg-slate-900/50 hover:border-slate-700"
+                }`}
+              >
+                <Icon
+                  className={`h-6 w-6 ${
+                    selected ? s.accent.text : "text-slate-400"
+                  }`}
+                />
+                <span
+                  className={`text-xs font-semibold ${
+                    selected ? "text-white" : "text-slate-300"
+                  }`}
+                >
+                  {s.label}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <p className="mt-2 text-xs text-slate-500">
+          {SCENARIOS.find((s) => s.id === scenario)?.description}
+        </p>
+      </section>
+
+      {/* Step 2 — Capture */}
+      <section className="mb-6">
+        <h2 className="mb-3 text-xs font-semibold uppercase tracking-widest text-slate-500">
+          2 · Capture the room
+        </h2>
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          onChange={handleFile}
+          className="hidden"
+        />
+
+        {!image ? (
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="flex w-full flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-slate-700 bg-slate-900/40 py-14 text-slate-300 transition hover:border-emerald-500/60 hover:bg-slate-900/70"
+          >
+            <Camera className="h-10 w-10 text-emerald-400" />
+            <span className="font-semibold">Open camera</span>
+            <span className="text-xs text-slate-500">
+              or tap to choose a photo
+            </span>
+          </button>
+        ) : (
+          <div className="space-y-3">
+            <div className="relative overflow-hidden rounded-2xl border border-slate-800">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={image}
+                alt="Room preview"
+                className="max-h-[55vh] w-full object-contain"
+              />
+            </div>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-800 bg-slate-900/60 py-3 text-sm font-medium text-slate-300 transition hover:text-white"
+            >
+              <RefreshCw className="h-4 w-4" />
+              Retake / choose another
+            </button>
+          </div>
+        )}
+      </section>
+
+      {error ? (
+        <p className="mb-4 rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+          {error}
+        </p>
+      ) : null}
+
+      {/* Sticky action bar */}
+      <div className="fixed inset-x-0 bottom-0 mx-auto w-full max-w-md border-t border-slate-800 bg-slate-950/90 px-5 py-4 backdrop-blur">
+        <button
+          onClick={runAnalysis}
+          disabled={!image || loading}
+          className="flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-500 py-4 text-base font-bold text-slate-950 shadow-neon transition active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400 disabled:shadow-none"
+        >
+          {loading ? (
+            <>
+              <Loader2 className="h-5 w-5 animate-spin" />
+              Analyzing space…
+            </>
+          ) : (
+            <>
+              <ScanLine className="h-5 w-5" />
+              Run Spatial Analysis
+            </>
+          )}
+        </button>
+        {!image ? (
+          <p className="mt-2 flex items-center justify-center gap-1 text-center text-xs text-slate-500">
+            <ImageUp className="h-3.5 w-3.5" />
+            Capture a photo to enable analysis
+          </p>
+        ) : null}
+      </div>
+    </main>
+  );
+}
