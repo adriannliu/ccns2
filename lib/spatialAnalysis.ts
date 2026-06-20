@@ -160,7 +160,7 @@ const INVALID_SAFE_ZONE_TEXT =
   /\b(pillar|column|post|pole|beam|joist|rafter|truss|girder|soffit|ceiling|duct|aircon|air.?con|air.?condition|hvac|ventilation|exhaust|conduit|pipe|cable tray|sprinkler|structural|I-beam|concrete column|overhead|light fixture|mount(ed)?\s+(on|to)\s+(the\s+)?ceiling)\b/i;
 
 const DROP_COVER_FURNITURE =
-  /\b(desk|table|counter|workbench|credenza|workstation|island)\b/i;
+  /\b(desk|table|counter|workbench|credenza|workstation|island|laptop|computer)\b/i;
 
 function normalizeSafeZones(raw: SafeZone[]): SafeZone[] {
   return raw.filter((zone) => {

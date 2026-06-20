@@ -1,5 +1,15 @@
 import type { AnalysisResult, SavedRoom } from "./types";
 
+/** Bounding boxes shown on the photo overlay (exits, cover, hazards). */
+export function overlayLabelCount(plan: AnalysisResult | null | undefined): number {
+  if (!plan) return 0;
+  return (
+    (plan.egress_points?.length ?? 0) +
+    (plan.safe_zones?.length ?? 0) +
+    (plan.hazards?.length ?? 0)
+  );
+}
+
 export function countPlanLabels(plan: AnalysisResult): {
   exits: number;
   safeZones: number;

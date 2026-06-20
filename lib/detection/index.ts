@@ -75,7 +75,7 @@ export async function runObjectDetection(
 
 export function formatDetectionsForPrompt(detections: SpatialDetection[]): string {
   if (!detections.length) {
-    return "DETECTIONS: none — return empty selections. Do not invent objects.";
+    return "DETECTIONS: none — return empty egress/safe/hazard selections. Do not invent objects.";
   }
 
   const lines = detections.map(

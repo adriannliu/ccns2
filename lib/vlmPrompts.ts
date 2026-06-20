@@ -15,7 +15,9 @@ RULES
 - Never select structure/fixture/other categories for safe zones — furniture only.
 - Never select structure as Drop & Cover (no pillars, beams, ducts, ceiling objects).
 - One Primary Door max (egress_door detection). Windows use type "Window".
-- Empty arrays are OK when nothing qualifies.
+- When no egress_door/egress_window detections exist, leave egress_selections empty.
+- Still populate hazard_selections for fixtures, structure, glass, and topple risks when present.
+- Prefer Cover / Hiding Spot on desk/table/laptop furniture when no door is visible.
 - Call emit_safety_plan exactly once.`;
 
 export const SYSTEM_PROMPT_VIDEO360 = `You are SafeSpace, an emergency planning assistant for 360° room scans.

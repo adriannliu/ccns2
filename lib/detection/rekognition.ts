@@ -10,7 +10,7 @@ import { categorizeLabel } from "./labelMap";
 import type { SpatialDetection } from "./types";
 
 const AWS_REGION = process.env.AWS_REGION ?? "us-east-1";
-const MIN_CONFIDENCE = Number(process.env.REKOGNITION_MIN_CONFIDENCE ?? 75);
+const MIN_CONFIDENCE = Number(process.env.REKOGNITION_MIN_CONFIDENCE ?? 60);
 
 function rekognitionBoxToBBox(box: {
   Left?: number;

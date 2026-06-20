@@ -12,6 +12,7 @@ import PrintPlanButton from "@/components/PrintPlanButton";
 import RoomManageActions from "@/components/RoomManageActions";
 import RoomModelView from "@/components/RoomModelView";
 import { imageOverlayCaption } from "@/lib/exitPath";
+import { overlayLabelCount } from "@/lib/planCounts";
 import { formatPlanAge, isPlanStale } from "@/lib/planAge";
 import { listRooms } from "@/lib/roomLibrary";
 import { buildPlansMapView, buildRoomMapView } from "@/lib/roomMapView";
@@ -77,8 +78,7 @@ export default function RoomDetailPage() {
               hazards: [],
               actionable_instructions: [],
             };
-      const overlayCount =
-        result.egress_points.length + result.safe_zones.length;
+      const overlayCount = overlayLabelCount(result);
       return { imageSrc, result, overlayCount, index };
     });
   }, [room, previewScenario]);
@@ -87,9 +87,7 @@ export default function RoomDetailPage() {
 
   const overlayCount = useMemo(() => {
     if (!scenarioPreview) return 0;
-    return (
-      scenarioPreview.egress_points.length + scenarioPreview.safe_zones.length
-    );
+    return overlayLabelCount(scenarioPreview);
   }, [scenarioPreview]);
 
   if (loading) {

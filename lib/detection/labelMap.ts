@@ -19,6 +19,18 @@ export function categorizeLabel(label: string): DetectionCategory {
   if (/\b(chair|stool|bench)\b/.test(n)) return "furniture";
 
   if (
+    /\b(laptop|notebook|computer|keyboard|mouse|tablet|cell phone|mobile phone|phone|backpack|book|printer)\b/.test(
+      n,
+    )
+  ) {
+    return "furniture";
+  }
+
+  if (/\b(plant|potted plant|flower|vase)\b/.test(n)) return "structure";
+
+  if (/\b(cup|mug|bottle|glass|bowl)\b/.test(n)) return "fixture";
+
+  if (
     /\b(pillar|column|post|pole|beam|joist|rafter|truss|duct|pipe|conduit|hvac|air.?con|vent|structural|I-beam|girder)\b/.test(
       n,
     )
