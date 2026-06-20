@@ -4,12 +4,13 @@
  * This is a thin, dependency-free wrapper around `fetch` so you can plug in
  * your real Butterbase credentials via environment variables later:
  *
- *   BUTTERBASE_API_URL   e.g. https://api.butterbase.dev/v1
- *   BUTTERBASE_API_KEY   your secret key
+ *   BUTTERBASE_API_URL   app API base, e.g. https://api.butterbase.ai/v1/app_xxx
+ *   BUTTERBASE_API_KEY   your bb_sk_... service key
  *   BUTTERBASE_TABLE     default table/collection name (e.g. "scans")
  *
- * Adjust the request/response shapes in `request()` and the CRUD helpers to
- * match Butterbase's actual API once you have docs/credentials.
+ * The data API is served at `${BUTTERBASE_API_URL}/${table}` (and
+ * `.../${table}/${id}` for a single row), so BUTTERBASE_API_URL must already
+ * include the `/v1/{app_id}` segment returned when the app was created.
  */
 
 const BASE_URL = process.env.BUTTERBASE_API_URL ?? "";
@@ -79,14 +80,14 @@ async function request<T>(
 
 export const butterbase = {
   insert: <T extends Record<string, unknown>>(record: T, table = DEFAULT_TABLE) =>
-    request<{ id: string }>(`/tables/${table}/rows`, {
+    request<{ id: string }>(`/${table}`, {
       method: "POST",
       body: JSON.stringify(record),
     }),
 
   get: <T>(id: string, table = DEFAULT_TABLE) =>
-    request<T>(`/tables/${table}/rows/${id}`, { method: "GET" }),
+    request<T>(`/${table}/${id}`, { method: "GET" }),
 
   list: <T>(table = DEFAULT_TABLE) =>
-    request<T[]>(`/tables/${table}/rows`, { method: "GET" }),
+    request<T[]>(`/${table}`, { method: "GET" }),
 };
