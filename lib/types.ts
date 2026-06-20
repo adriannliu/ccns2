@@ -48,16 +48,27 @@ export interface AnalysisResult {
   actionable_instructions: string[];
 }
 
-/** Payload sent from the client to /api/analyze. */
+/**
+ * Payload sent from the client to /api/analyze.
+ *
+ * Preferred path: `imageKey` referencing an object already uploaded to S3.
+ * Fallback path (no S3 configured): inline base64 `image`.
+ */
 export interface AnalyzeRequest {
-  /** Base64 data URL or raw base64 string of the captured image. */
-  image: string;
   scenario: Scenario;
+  /** S3 object key of an already-uploaded scan image. */
+  imageKey?: string;
+  /** Browser content type of the uploaded image (e.g. "image/jpeg"). */
+  imageContentType?: string;
+  /** Inline base64 data URL / raw base64 (fallback when S3 is unavailable). */
+  image?: string;
 }
 
 /** Response returned by /api/analyze. */
 export interface AnalyzeResponse extends AnalysisResult {
   scenario: Scenario;
+  /** Displayable image URL (presigned S3 GET) when the scan came from S3. */
+  imageUrl?: string;
   /** Result of persisting the scan to Butterbase. */
   saved: {
     success: boolean;

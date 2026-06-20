@@ -31,6 +31,7 @@ export default function ScanPage() {
 
   const [scenario, setScenario] = useState<Scenario>("FIRE");
   const [image, setImage] = useState<string | null>(null);
+  const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -44,9 +45,47 @@ export default function ScanPage() {
     try {
       const dataUrl = await fileToDataUrl(file);
       setImage(dataUrl);
+      setFile(file);
     } catch {
       setError("Could not read that image. Try another photo.");
     }
+  }
+
+  /**
+   * Upload the photo straight to S3 via a presigned URL. Returns the object key
+   * on success, or null when S3 isn't configured (caller falls back to base64).
+   */
+  async function uploadToS3(
+    file: File,
+  ): Promise<{ key: string; contentType: string } | null> {
+    const presign = await fetch("/api/upload", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ contentType: file.type }),
+    });
+
+    if (presign.status === 501) return null; // S3 not configured -> fallback
+    if (!presign.ok) {
+      const body = await presign.json().catch(() => ({}));
+      throw new Error(body?.error ?? `Upload URL failed (${presign.status})`);
+    }
+
+    const { uploadUrl, key, contentType } = (await presign.json()) as {
+      uploadUrl: string;
+      key: string;
+      contentType: string;
+    };
+
+    const put = await fetch(uploadUrl, {
+      method: "PUT",
+      headers: { "Content-Type": contentType },
+      body: file,
+    });
+    if (!put.ok) {
+      throw new Error(`S3 upload failed (${put.status})`);
+    }
+
+    return { key, contentType };
   }
 
   async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -86,15 +125,27 @@ export default function ScanPage() {
     : "border-slate-700 bg-slate-900/40 hover:border-emerald-500/60 hover:bg-slate-900/70";
 
   async function runAnalysis() {
-    if (!image) return;
+    if (!image || !file) return;
     setLoading(true);
     setError(null);
 
     try {
+      // 1. Try direct-to-S3 upload; fall back to inline base64 if unavailable.
+      const uploaded = await uploadToS3(file);
+
+      const payload = uploaded
+        ? {
+            scenario,
+            imageKey: uploaded.key,
+            imageContentType: uploaded.contentType,
+          }
+        : { scenario, image };
+
+      // 2. Run the spatial analysis.
       const res = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image, scenario }),
+        body: JSON.stringify(payload),
       });
 
       if (!res.ok) {
@@ -103,7 +154,13 @@ export default function ScanPage() {
       }
 
       const result = (await res.json()) as AnalyzeResponse;
-      saveScan({ image, scenario, result, createdAt: Date.now() });
+      // Prefer the presigned S3 URL for display; fall back to the local preview.
+      saveScan({
+        image: result.imageUrl ?? image,
+        scenario,
+        result,
+        createdAt: Date.now(),
+      });
       router.push("/results");
     } catch (err) {
       setError(

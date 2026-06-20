@@ -36,12 +36,27 @@ app/
   api/analyze/route.ts  POST: base64 image + scenario -> AnalysisResult
 components/
   ImageOverlay.tsx      Renders normalized [ymin,xmin,ymax,xmax] boxes
+  api/upload/route.ts   POST: issues a presigned S3 PUT URL
 lib/
   types.ts              Shared domain types
   scenarios.ts          Scenario config (labels, icons, accent colors)
+  s3.ts                 Presigned upload/download URLs + Bedrock s3Location
   butterbase.ts         Generic Butterbase REST client (fetch-based)
   scanStore.ts          sessionStorage hand-off between scan -> results
 ```
+
+### Image pipeline (S3)
+
+To avoid Bedrock's ~5 MB inline-image cap (and Vercel's serverless body limit),
+the photo is uploaded **directly to S3** from the browser:
+
+1. `/scan` asks `POST /api/upload` for a presigned PUT URL.
+2. The browser `PUT`s the photo bytes straight to S3.
+3. `/scan` calls `POST /api/analyze` with the S3 `imageKey` (not the bytes).
+4. `/api/analyze` passes the object to Bedrock via Converse `s3Location`, then
+   returns a presigned GET URL the results page uses to render the image.
+
+If `S3_BUCKET` is unset, the client transparently falls back to inline base64.
 
 ### The overlay math (`components/ImageOverlay.tsx`)
 
@@ -62,21 +77,27 @@ zones, 🔴 hazards.
 
 ## AI model
 
-The VLM is **Anthropic Claude 3.5 Sonnet on AWS Bedrock**, called via the
-**Converse API** (`@aws-sdk/client-bedrock-runtime`). The image is sent as bytes
-in a multimodal content block; inference runs at `temperature 0.1` / `maxTokens
-1024` (per `AGENTS.md`). Claude has no `json_object` flag, so the route enforces
-JSON via the system prompt and a tolerant `extractJson()` parser.
+The VLM is **Anthropic Claude Sonnet 4.5 on AWS Bedrock**, called via the
+**Converse API** (`@aws-sdk/client-bedrock-runtime`). The image is referenced
+from S3 (`s3Location`), or sent inline as bytes when S3 is unset; inference runs
+at `temperature 0.1` / `maxTokens 1024` (per `AGENTS.md`). Claude has no
+`json_object` flag, so the route enforces JSON via the system prompt and a
+tolerant `extractJson()` parser.
 
 ## Configuration (`.env`)
 
 ```bash
-# AWS Bedrock (Claude 3.5 Sonnet) — uses the AWS SigV4 credential chain
+# AWS Bedrock (Claude Sonnet 4.5) — uses the AWS SigV4 credential chain
 AWS_REGION="us-east-1"
 AWS_ACCESS_KEY_ID="AKIA..."
 AWS_SECRET_ACCESS_KEY="..."
 # AWS_SESSION_TOKEN=""   # only for temporary/STS creds
-BEDROCK_MODEL_ID="anthropic.claude-3-5-sonnet-20240620-v1:0"
+BEDROCK_MODEL_ID="us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+
+# S3 (direct image upload) — same region as AWS_REGION
+S3_BUCKET="safespace-scans"
+S3_PREFIX="scans"
+AWS_ACCOUNT_ID="073158194660"
 
 # Butterbase (REST)
 BUTTERBASE_API_URL="https://api.butterbase.dev/v1"
@@ -88,10 +109,48 @@ BUTTERBASE_TABLE="scans"
   `app/api/analyze/route.ts` (currently a placeholder).
 - **Offline mode:** without `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, the
   route returns a deterministic mock so the flow is fully demoable.
-- **Bedrock access:** enable model access for Claude 3.5 Sonnet in your AWS
-  account/region, and ensure the IAM principal has `bedrock:InvokeModel`.
+- **Bedrock access:** enable model access for Claude Sonnet 4.5 in your AWS
+  account/region. Newer Claude models are on-demand only via a **cross-region
+  inference profile**, so use the `us.`-prefixed id. Ensure the IAM principal has
+  `bedrock:InvokeModel` (skip for root).
 - **Butterbase:** adjust endpoints/shapes in `lib/butterbase.ts` to match the
   real API once you have docs.
+
+### S3 setup
+
+1. **Create the bucket** (same region as the model):
+
+```bash
+aws s3 mb s3://safespace-scans --region us-east-1
+```
+
+2. **Add CORS** so the browser can presigned-`PUT` directly:
+
+```bash
+aws s3api put-bucket-cors --bucket safespace-scans --cors-configuration '{
+  "CORSRules": [{
+    "AllowedMethods": ["PUT", "GET"],
+    "AllowedOrigins": ["http://localhost:3000", "https://YOUR-DOMAIN.vercel.app"],
+    "AllowedHeaders": ["*"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3000
+  }]
+}'
+```
+
+3. **IAM** — the app identity needs S3 access in addition to Bedrock:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": ["s3:PutObject", "s3:GetObject"],
+  "Resource": "arn:aws:s3:::safespace-scans/*"
+}
+```
+
+> Bedrock reads the object using the *caller's* credentials, so the same
+> `s3:GetObject` permission covers both the presigned download and the
+> `s3Location` model read.
 
 ## Deploy
 
